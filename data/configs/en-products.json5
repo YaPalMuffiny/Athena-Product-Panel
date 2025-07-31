@@ -1,0 +1,86 @@
+{
+    // Product Panel Configuration
+    config: {
+        // Panel appearance settings
+        panel: {
+            description: "🎯 Choose a product below to download. Make sure you have the required role!",
+            embed_color: "#7289da",
+            thumbnail_url: "https://example.com/your-logo.png", // Optional
+            footer_text: "Product Downloads • Make sure you have the required permissions"
+        },
+
+        // Products configuration
+        products: [
+            {
+                id: "premium_tool",
+                name: "Premium Tool v2.1",
+                description: "Advanced automation tool with premium features",
+                file_path: "premium_tool_v2.1.zip", // File should be in plugin/data/products/
+                download_name: "PremiumTool_v2.1.zip", // Name when downloaded
+                emoji: "⚡",
+                required_roles: [
+                    "123456789012345678", // Premium Member Role ID
+                    "987654321098765432"  // VIP Role ID
+                ]
+            },
+            {
+                id: "basic_script",
+                name: "Basic Script Pack",
+                description: "Collection of useful basic scripts",
+                file_path: "basic_scripts.zip",
+                download_name: "BasicScripts.zip",
+                emoji: "📜",
+                required_roles: [
+                    "123456789012345678", // Member Role ID
+                    "111222333444555666"  // Verified Role ID
+                ]
+            },
+            {
+                id: "exclusive_content",
+                name: "Exclusive Content",
+                description: "Special exclusive content for top tier members",
+                file_path: "exclusive_content.rar",
+                download_name: "ExclusiveContent.rar",
+                emoji: "💎",
+                required_roles: [
+                    "999888777666555444"  // Elite Role ID
+                ]
+            },
+            {
+                id: "documentation", 
+                name: "Full Documentation",
+                description: "Complete API documentation and guides",
+                file_path: "documentation.pdf",
+                download_name: "API_Documentation.pdf",
+                emoji: "📚",
+                required_roles: [
+                    "123456789012345678", // Any verified member
+                    "987654321098765432"
+                ]
+            },
+            {
+                id: "source_code",
+                name: "Source Code Access",
+                description: "Full source code repository access",
+                file_path: "source_code.zip",
+                download_name: "SourceCode_Latest.zip", 
+                emoji: "💻",
+                required_roles: [
+                    "777666555444333222"  // Developer Role ID
+                ]
+            }
+        ],
+
+        // Permission configuration
+        permissions: {
+            panel_command: 'member', // Who can use /productpanel command
+        },
+
+        // Logging settings
+        logging: {
+            track_downloads: true, // Save download history to database
+            log_to_channel: false, // Optional: log to a specific channel
+            log_channel_id: "123456789012345678" // Channel ID for logging (if enabled)
+        }
+    }
+}
