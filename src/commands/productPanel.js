@@ -63,7 +63,7 @@ module.exports = class productPanel extends command {
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('refresh')
-                        .setDescription('Manually refresh all product panels (Admin only)')
+                        .setDescription('Manually refresh all existing product panels (Admin only)')
                 )
                 .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
             contextMenu: false,
@@ -611,20 +611,6 @@ module.exports = class productPanel extends command {
 
         await interaction.deferReply({ ephemeral: true });
 
-        const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-        
-        if (!productConfig.config.channels?.auto_setup) {
-            const warningEmbed = new EmbedBuilder()
-                .setTitle('⚠️ Auto-Setup Disabled')
-                .setDescription('Auto-setup is disabled in the configuration. No panels will be refreshed automatically.')
-                .setColor('#ffa500')
-                .setTimestamp();
-
-            return await interaction.editReply({
-                embeds: [warningEmbed]
-            });
-        }
-
         const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
         
         if (!handler) {
@@ -633,47 +619,61 @@ module.exports = class productPanel extends command {
             });
         }
 
-        // Get stats before refresh
-        const statsBefore = {
-            active_messages: handler.panelMessages?.size || 0
-        };
+        try {
+            // Get stats before refresh
+            const statsBefore = {
+                active_messages: handler.panelMessages?.size || 0
+            };
 
-        // Refresh panels
-        await handler.autoSetupChannelPanels();
+            // Refresh panels using the handler's method
+            const refreshResult = await handler.refreshAllPanelMessages();
 
-        // Get stats after refresh
-        const statsAfter = {
-            active_messages: handler.panelMessages?.size || 0,
-            total_panels: 0,
-            multi_panels: productConfig.config.panels ? Object.keys(productConfig.config.panels).length : 0,
-            legacy_panels: productConfig.config.products?.length > 0 ? 1 : 0,
-            auto_setup_enabled: productConfig.config.channels?.auto_setup || false,
-            update_interval: productConfig.config.channels?.update_interval || 0
-        };
-        statsAfter.total_panels = statsAfter.multi_panels + statsAfter.legacy_panels;
+            // Get current config for display
+            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+            const statsAfter = {
+                active_messages: handler.panelMessages?.size || 0,
+                total_panels_configured: 0,
+                multi_panels: productConfig.config.panels ? Object.keys(productConfig.config.panels).length : 0,
+                legacy_panels: productConfig.config.products?.length > 0 ? 1 : 0
+            };
+            statsAfter.total_panels_configured = statsAfter.multi_panels + statsAfter.legacy_panels;
 
-        const successEmbed = new EmbedBuilder()
-            .setTitle('✅ Panels Refreshed Successfully')
-            .setDescription('All product panels have been checked and updated where necessary.')
-            .addFields(
-                { name: 'Total Panels Configured', value: `${statsAfter.total_panels}`, inline: true },
-                { name: 'Multi-Panels', value: `${statsAfter.multi_panels}`, inline: true },
-                { name: 'Legacy Panels', value: `${statsAfter.legacy_panels}`, inline: true },
-                { name: 'Active Messages', value: `${statsAfter.active_messages}`, inline: true },
-                { name: 'Auto-Setup', value: statsAfter.auto_setup_enabled ? '✅ Enabled' : '❌ Disabled', inline: true },
-                { name: 'Update Interval', value: statsAfter.update_interval > 0 ? `${statsAfter.update_interval}ms` : 'Disabled', inline: true }
-            )
-            .setColor('#00ff00')
-            .setFooter({ text: 'Refresh completed' })
-            .setTimestamp();
+            const successEmbed = new EmbedBuilder()
+                .setTitle('✅ Panels Refreshed Successfully')
+                .setDescription('All existing product panel messages have been checked and updated.')
+                .addFields(
+                    { name: 'Panels Configured', value: `${statsAfter.total_panels_configured}`, inline: true },
+                    { name: 'Multi-Panels Available', value: `${statsAfter.multi_panels}`, inline: true },
+                    { name: 'Legacy Panel Available', value: statsAfter.legacy_panels > 0 ? '✅ Yes' : '❌ No', inline: true },
+                    { name: 'Messages Updated', value: `${refreshResult.refreshCount}`, inline: true },
+                    { name: 'Update Errors', value: `${refreshResult.errorCount}`, inline: true },
+                    { name: 'Active Panel Messages', value: `${statsAfter.active_messages}`, inline: true }
+                )
+                .setColor('#00ff00')
+                .setFooter({ text: 'Refresh completed • Only existing panels were updated' })
+                .setTimestamp();
 
-        await interaction.editReply({
-            embeds: [successEmbed]
-        });
+            await interaction.editReply({
+                embeds: [successEmbed]
+            });
 
-        this.heart.core.console.log(
-            this.heart.core.console.type.log,
-            `Product panels manually refreshed by ${interaction.user.tag} (${interaction.user.id}) in guild ${interaction.guild.name}`
-        );
+            this.heart.core.console.log(
+                this.heart.core.console.type.log,
+                `Product panels manually refreshed by ${interaction.user.tag} (${interaction.user.id}) in guild ${interaction.guild.name}. Updated: ${refreshResult.refreshCount}, Errors: ${refreshResult.errorCount}`
+            );
+
+        } catch (err) {
+            this.heart.core.console.log(this.heart.core.console.type.error, 'Error in refresh command:', err);
+            
+            const errorEmbed = new EmbedBuilder()
+                .setTitle('❌ Refresh Failed')
+                .setDescription('An error occurred while trying to refresh the panels. Check the console for more details.')
+                .setColor('#ff0000')
+                .setTimestamp();
+
+            await interaction.editReply({
+                embeds: [errorEmbed]
+            });
+        }
     }
 };
