@@ -144,6 +144,86 @@ module.exports = class productPanelHandler extends handler {
 	}
 
 	/**
+	 * Clear all existing panel messages (used by /clear command).
+	 */
+	async clearAllPanelMessages() {
+		try {
+			// Ensure data is loaded from database first
+			await this.loadPanelMessagesFromDatabase();
+			
+			let removedCount = 0;
+			let errorCount = 0;
+			const channelsAffected = new Set();
+
+			this.heart.core.console.log(this.heart.core.console.type.log, `Starting clear of ${this.panelMessages.size} panel messages...`);
+
+			// Clear all tracked panel messages
+			for (const [messageKey, messageId] of this.panelMessages.entries()) {
+				try {
+					const [channelId, panelId] = messageKey.split('-');
+					
+					// Get the channel
+					const channel = this.heart.core.discord.client.channels.cache.get(channelId);
+					if (!channel) {
+						this.heart.core.console.log(this.heart.core.console.type.warning, `Channel ${channelId} not found, removing from tracking`);
+						this.panelMessages.delete(messageKey);
+						continue;
+					}
+
+					// Try to fetch and delete the message
+					try {
+						const message = await channel.messages.fetch(messageId);
+						await message.delete();
+						channelsAffected.add(channelId);
+						removedCount++;
+						
+						this.heart.core.console.log(
+							this.heart.core.console.type.log,
+							`Deleted panel message ${messageId} from channel ${channel.name} (${channelId})`
+						);
+					} catch (fetchErr) {
+						this.heart.core.console.log(this.heart.core.console.type.warning, `Message ${messageId} not found in ${channel.name}, removing from tracking`);
+					}
+
+					// Remove from tracking regardless of success
+					this.panelMessages.delete(messageKey);
+					
+					// Remove from database
+					await this.removePanelMessageFromDatabase(channelId, panelId);
+
+				} catch (err) {
+					this.heart.core.console.log(this.heart.core.console.type.error, `Error clearing message ${messageKey}:`, err);
+					errorCount++;
+					// Still remove from tracking even if there was an error
+					this.panelMessages.delete(messageKey);
+					
+					// Remove from database
+					await this.removePanelMessageFromDatabase(channelId, panelId);
+				}
+			}
+
+			// Clear all from database as well
+			await this.clearAllPanelMessagesFromDatabase();
+
+			this.heart.core.console.log(
+				this.heart.core.console.type.log, 
+				`Panel clear complete: ${removedCount} removed, ${errorCount} errors, ${channelsAffected.size} channels affected`
+			);
+
+			return { 
+				removedCount, 
+				errorCount, 
+				channelsAffected: channelsAffected.size,
+				totalTracked: this.panelMessages.size 
+			};
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in clear all panel messages:', err);
+			throw err;
+		}
+	}
+
+	/**
 	 * Updates an existing panel message.
 	 * @param {Object} channel - The Discord channel object.
 	 * @param {string} panelId - The panel ID.
@@ -483,4 +563,6 @@ module.exports = class productPanelHandler extends handler {
 			}
 		}
 	}
+
+
 };

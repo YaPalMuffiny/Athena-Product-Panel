@@ -65,6 +65,7 @@ module.exports = class productPanel extends command {
                         .setName('refresh')
                         .setDescription('Manually refresh all existing product panels (Admin only)')
                 )
+
                 .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
             contextMenu: false,
             global: true,
@@ -676,4 +677,6 @@ module.exports = class productPanel extends command {
             });
         }
     }
+
+
 };
