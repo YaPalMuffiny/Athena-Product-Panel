@@ -1,9 +1,9 @@
-// main.js - Updated plugin with auto-setup and update functionality
+// main.js - Updated plugin with manual-only functionality
 const plugin = require('../../main/discord/core/plugins/plugin.js');
 const productPanelHandler = require('./src/handler/productPanelHandler.js');
 
 /**
- * Enhanced product panel plugin with auto-update functionality.
+ * Product panel plugin with manual-only functionality.
  * @class
  * @extends pluginType
  */
@@ -12,7 +12,7 @@ module.exports = class productPanel extends plugin {
 		super(heart, { 
 			name: 'productPanel', 
 			author: 'Your Name', 
-			version: '2.0.0', 
+			version: '2.1.0', 
 			priority: 0, 
 			dependencies: ['core'], 
 			softDependencies: [], 
@@ -41,11 +41,6 @@ module.exports = class productPanel extends plugin {
 						panel_command: undefined,
 						channel_setup: undefined,
 					},
-					channels: {
-						auto_setup: undefined,
-						update_interval: undefined,
-						delete_old_messages: undefined,
-					},
 					logging: {
 						track_downloads: undefined,
 						log_to_channel: undefined,
@@ -68,7 +63,7 @@ module.exports = class productPanel extends plugin {
 		const handler = new productPanelHandler(this.heart);
 		this.heart.core.discord.core.handler.manager.register(handler);
 
-		// Get client from heart instead of direct reference
+		// Get client from heart
 		const client = this.heart.core.discord?.client;
 		if (!client) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Discord client not available');
@@ -79,59 +74,16 @@ module.exports = class productPanel extends plugin {
 			return;
 		}
 
-		// Wait for Discord client to be ready before setting up panels
-		if (client.isReady()) {
-			await this.initializeChannelPanels();
-		} else {
-			client.once('ready', async () => {
-				await this.initializeChannelPanels();
-			});
-		}
+		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin loaded successfully (Manual mode only)');
 	}
 
 	/**
-	 * Initialize channel panels on bot start/restart.
-	 */
-	async initializeChannelPanels() {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			
-			if (productConfig.config.channels?.auto_setup) {
-				this.heart.core.console.log(this.heart.core.console.type.startup, 'Initializing auto-setup channel panels...');
-				
-				const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
-				await handler.autoSetupChannelPanels();
-				
-				this.heart.core.console.log(this.heart.core.console.type.startup, 'Channel panels initialized successfully');
-				
-				// Setup interval for periodic updates (if configured)
-				if (productConfig.config.channels.update_interval && productConfig.config.channels.update_interval > 0) {
-					this.heart.core.console.log(
-						this.heart.core.console.type.startup, 
-						`Setting up panel update interval: ${productConfig.config.channels.update_interval}ms`
-					);
-					
-					setInterval(async () => {
-						try {
-							await handler.autoSetupChannelPanels();
-						} catch (err) {
-							this.heart.core.console.log(this.heart.core.console.type.error, 'Error in periodic panel update:', err);
-						}
-					}, productConfig.config.channels.update_interval);
-				}
-			}
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error initializing channel panels:', err);
-		}
-	}
-
-	/**
-	 * Manual method to refresh all panels (can be called externally).
+	 * Manual method to refresh all panels (called by /refresh command).
 	 */
 	async refreshAllPanels() {
 		try {
 			const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
-			await handler.autoSetupChannelPanels();
+			await handler.refreshAllPanelMessages();
 			this.heart.core.console.log(this.heart.core.console.type.log, 'All panels refreshed manually');
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error refreshing panels manually:', err);
@@ -152,8 +104,7 @@ module.exports = class productPanel extends plugin {
 				active_messages: handler.panelMessages.size,
 				multi_panels: 0,
 				legacy_panels: 0,
-				auto_setup_enabled: productConfig.config.channels?.auto_setup || false,
-				update_interval: productConfig.config.channels?.update_interval || 0
+				mode: 'manual_only'
 			};
 
 			if (productConfig.config.panels) {
