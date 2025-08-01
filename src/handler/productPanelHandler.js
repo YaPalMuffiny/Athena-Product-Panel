@@ -1,11 +1,11 @@
-// src/handler/productPanelHandler.js - Manual-only handler
+// src/handler/productPanelHandler.js - Optimized handler with separate functionality
 const handler = require('../../../../main/discord/core/handler/handler.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
 /**
- * Product panel handler with manual-only functionality.
+ * Product panel handler with optimized setup and channel functionality.
  * @class
  * @extends handlerType
  */
@@ -16,10 +16,70 @@ module.exports = class productPanelHandler extends handler {
 		
 		// Store panel message IDs for tracking
 		this.panelMessages = new Map(); // key: "channelId-panelId", value: messageId
+		
+		// Load existing panel messages from database on startup
+		this.loadPanelMessagesFromDatabase();
 	}
 
 	getCache() {
 		return this.heart.core.discord.core.cache.manager.get('productCache');
+	}
+
+	/**
+	 * Load panel message tracking from database
+	 */
+	async loadPanelMessagesFromDatabase() {
+		try {
+			const cache = this.getCache();
+			const panelData = await cache.get('panel_messages');
+			if (panelData) {
+				this.panelMessages = new Map(Object.entries(panelData));
+				this.heart.core.console.log(
+					this.heart.core.console.type.log,
+					`Loaded ${this.panelMessages.size} panel messages from database`
+				);
+			}
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error loading panel messages from database:', err);
+		}
+	}
+
+	/**
+	 * Save panel message tracking to database
+	 */
+	async savePanelMessagesToDatabase() {
+		try {
+			const cache = this.getCache();
+			const panelData = Object.fromEntries(this.panelMessages);
+			await cache.set('panel_messages', panelData);
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving panel messages to database:', err);
+		}
+	}
+
+	/**
+	 * Remove panel message from database
+	 */
+	async removePanelMessageFromDatabase(channelId, panelId) {
+		try {
+			this.panelMessages.delete(`${channelId}-${panelId}`);
+			await this.savePanelMessagesToDatabase();
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error removing panel message from database:', err);
+		}
+	}
+
+	/**
+	 * Clear all panel messages from database
+	 */
+	async clearAllPanelMessagesFromDatabase() {
+		try {
+			const cache = this.getCache();
+			await cache.delete('panel_messages');
+			this.panelMessages.clear();
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error clearing panel messages from database:', err);
+		}
 	}
 
 	/**
@@ -35,11 +95,26 @@ module.exports = class productPanelHandler extends handler {
 				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
 			}
 
+			// Check if panel already exists in this channel
+			const existingKey = `${targetChannel.id}-${panelId}`;
+			if (this.panelMessages.has(existingKey)) {
+				const existingMessageId = this.panelMessages.get(existingKey);
+				try {
+					const existingMessage = await targetChannel.messages.fetch(existingMessageId);
+					if (existingMessage) {
+						throw new Error(`Panel "${panelId}" already exists in channel ${targetChannel.name}`);
+					}
+				} catch (fetchErr) {
+					// Message doesn't exist anymore, remove from tracking
+					this.panelMessages.delete(existingKey);
+				}
+			}
+
 			await this.createPanelMessage(targetChannel, panelId, panel);
 			
 			this.heart.core.console.log(
 				this.heart.core.console.type.log,
-				`Panel ${panelId} manually setup in channel ${targetChannel.name} (${targetChannel.id})`
+				`Panel ${panelId} setup in channel ${targetChannel.name} (${targetChannel.id})`
 			);
 
 		} catch (err) {
@@ -62,11 +137,26 @@ module.exports = class productPanelHandler extends handler {
 				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
 			}
 
+			// Check if legacy panel already exists in this channel
+			const existingKey = `${targetChannel.id}-legacy`;
+			if (this.panelMessages.has(existingKey)) {
+				const existingMessageId = this.panelMessages.get(existingKey);
+				try {
+					const existingMessage = await targetChannel.messages.fetch(existingMessageId);
+					if (existingMessage) {
+						throw new Error(`Legacy panel already exists in channel ${targetChannel.name}`);
+					}
+				} catch (fetchErr) {
+					// Message doesn't exist anymore, remove from tracking
+					this.panelMessages.delete(existingKey);
+				}
+			}
+
 			await this.createLegacyPanelMessage(targetChannel, panel);
 			
 			this.heart.core.console.log(
 				this.heart.core.console.type.log,
-				`Legacy panel manually setup in channel ${targetChannel.name} (${targetChannel.id})`
+				`Legacy panel setup in channel ${targetChannel.name} (${targetChannel.id})`
 			);
 
 		} catch (err) {
@@ -76,75 +166,7 @@ module.exports = class productPanelHandler extends handler {
 	}
 
 	/**
-	 * Refresh all existing panel messages (used by /refresh command).
-	 */
-	async refreshAllPanelMessages() {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			let refreshCount = 0;
-			let errorCount = 0;
-
-			this.heart.core.console.log(this.heart.core.console.type.log, `Starting refresh of ${this.panelMessages.size} panel messages...`);
-
-			// Refresh all tracked panel messages
-			for (const [messageKey, messageId] of this.panelMessages.entries()) {
-				try {
-					const [channelId, panelId] = messageKey.split('-');
-					
-					// Get the channel
-					const channel = this.heart.core.discord.client.channels.cache.get(channelId);
-					if (!channel) {
-						this.heart.core.console.log(this.heart.core.console.type.warning, `Channel ${channelId} not found, removing from tracking`);
-						this.panelMessages.delete(messageKey);
-						continue;
-					}
-
-					// Try to fetch the message
-					let message;
-					try {
-						message = await channel.messages.fetch(messageId);
-					} catch (fetchErr) {
-						this.heart.core.console.log(this.heart.core.console.type.warning, `Message ${messageId} not found in ${channel.name}, removing from tracking`);
-						this.panelMessages.delete(messageKey);
-						continue;
-					}
-
-					// Update the message based on panel type
-					if (panelId === 'legacy') {
-						await this.updateLegacyPanelMessage(channel, productConfig.config.panel, messageId);
-					} else {
-						const panel = productConfig.config.panels[panelId];
-						if (panel) {
-							await this.updatePanelMessage(channel, panelId, panel, messageId);
-						} else {
-							this.heart.core.console.log(this.heart.core.console.type.warning, `Panel ${panelId} no longer exists in config, removing message tracking`);
-							this.panelMessages.delete(messageKey);
-							continue;
-						}
-					}
-
-					refreshCount++;
-				} catch (err) {
-					this.heart.core.console.log(this.heart.core.console.type.error, `Error refreshing message ${messageKey}:`, err);
-					errorCount++;
-				}
-			}
-
-			this.heart.core.console.log(
-				this.heart.core.console.type.log, 
-				`Panel refresh complete: ${refreshCount} updated, ${errorCount} errors`
-			);
-
-			return { refreshCount, errorCount, totalTracked: this.panelMessages.size };
-
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in refresh all panel messages:', err);
-			throw err;
-		}
-	}
-
-	/**
-	 * Clear all existing panel messages (used by /clear command).
+	 * Clear all existing panel messages (used by /setuppanel clear command).
 	 */
 	async clearAllPanelMessages() {
 		try {
@@ -166,7 +188,6 @@ module.exports = class productPanelHandler extends handler {
 					const channel = this.heart.core.discord.client.channels.cache.get(channelId);
 					if (!channel) {
 						this.heart.core.console.log(this.heart.core.console.type.warning, `Channel ${channelId} not found, removing from tracking`);
-						this.panelMessages.delete(messageKey);
 						continue;
 					}
 
@@ -185,24 +206,13 @@ module.exports = class productPanelHandler extends handler {
 						this.heart.core.console.log(this.heart.core.console.type.warning, `Message ${messageId} not found in ${channel.name}, removing from tracking`);
 					}
 
-					// Remove from tracking regardless of success
-					this.panelMessages.delete(messageKey);
-					
-					// Remove from database
-					await this.removePanelMessageFromDatabase(channelId, panelId);
-
 				} catch (err) {
 					this.heart.core.console.log(this.heart.core.console.type.error, `Error clearing message ${messageKey}:`, err);
 					errorCount++;
-					// Still remove from tracking even if there was an error
-					this.panelMessages.delete(messageKey);
-					
-					// Remove from database
-					await this.removePanelMessageFromDatabase(channelId, panelId);
 				}
 			}
 
-			// Clear all from database as well
+			// Clear all from database and memory
 			await this.clearAllPanelMessagesFromDatabase();
 
 			this.heart.core.console.log(
@@ -214,95 +224,11 @@ module.exports = class productPanelHandler extends handler {
 				removedCount, 
 				errorCount, 
 				channelsAffected: channelsAffected.size,
-				totalTracked: this.panelMessages.size 
+				totalTracked: 0 // All cleared
 			};
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in clear all panel messages:', err);
-			throw err;
-		}
-	}
-
-	/**
-	 * Updates an existing panel message.
-	 * @param {Object} channel - The Discord channel object.
-	 * @param {string} panelId - The panel ID.
-	 * @param {Object} panel - The panel configuration.
-	 * @param {string} messageId - The existing message ID.
-	 */
-	async updatePanelMessage(channel, panelId, panel, messageId) {
-		try {
-			const message = await channel.messages.fetch(messageId);
-			
-			// Create updated embed
-			const embed = new EmbedBuilder()
-				.setTitle(panel.title || '🛍️ Product Download Panel')
-				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
-				.setColor(panel.embed_color || '#0099ff')
-				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private. • Updated` })
-				.setTimestamp();
-
-			if (panel.thumbnail_url) {
-				embed.setThumbnail(panel.thumbnail_url);
-			}
-
-			// Create updated buttons
-			const buttons = this.createChannelProductButtons(panel.products || [], panelId);
-
-			await message.edit({
-				embeds: [embed],
-				components: buttons
-			});
-
-			this.heart.core.console.log(
-				this.heart.core.console.type.log,
-				`Updated panel ${panelId} in channel ${channel.name} (${channel.id})`
-			);
-
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, `Error updating panel message for ${panelId}:`, err);
-			throw err;
-		}
-	}
-
-	/**
-	 * Updates an existing legacy panel message.
-	 * @param {Object} channel - The Discord channel object.
-	 * @param {Object} panel - The panel configuration.
-	 * @param {string} messageId - The existing message ID.
-	 */
-	async updateLegacyPanelMessage(channel, panel, messageId) {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			const message = await channel.messages.fetch(messageId);
-			
-			// Create updated embed
-			const embed = new EmbedBuilder()
-				.setTitle('🛍️ Product Download Panel')
-				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
-				.setColor(panel.embed_color || '#0099ff')
-				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private. • Updated` })
-				.setTimestamp();
-
-			if (panel.thumbnail_url) {
-				embed.setThumbnail(panel.thumbnail_url);
-			}
-
-			// Create updated buttons
-			const buttons = this.createChannelProductButtons(productConfig.config.products || [], 'legacy');
-
-			await message.edit({
-				embeds: [embed],
-				components: buttons
-			});
-
-			this.heart.core.console.log(
-				this.heart.core.console.type.log,
-				`Updated legacy panel in channel ${channel.name} (${channel.id})`
-			);
-
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error updating legacy panel message:', err);
 			throw err;
 		}
 	}
@@ -320,7 +246,7 @@ module.exports = class productPanelHandler extends handler {
 				.setTitle(panel.title || '🛍️ Product Download Panel')
 				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
 				.setColor(panel.embed_color || '#0099ff')
-				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private.` })
+				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Downloads are private` })
 				.setTimestamp();
 
 			if (panel.thumbnail_url) {
@@ -335,16 +261,22 @@ module.exports = class productPanelHandler extends handler {
 				components: buttons
 			});
 
-			// Store message ID for future reference
-			this.panelMessages.set(`${channel.id}-${panelId}`, message.id);
+			// Store message ID for tracking
+			const messageKey = `${channel.id}-${panelId}`;
+			this.panelMessages.set(messageKey, message.id);
+			await this.savePanelMessagesToDatabase();
 
-			// Set up button collector that doesn't expire
+			// Set up persistent button collector
 			const collector = message.createMessageComponentCollector({
-				filter: (interaction) => interaction.customId.startsWith(`iynx:athenabot:productPanel:channel_product_`),
+				filter: (interaction) => interaction.customId.startsWith(`setup:product:`),
 			});
 
 			collector.on('collect', async (buttonInteraction) => {
 				await this.handleChannelButtonInteraction(buttonInteraction, panelId);
+			});
+
+			collector.on('error', (err) => {
+				this.heart.core.console.log(this.heart.core.console.type.error, `Collector error for panel ${panelId}:`, err);
 			});
 
 		} catch (err) {
@@ -367,7 +299,7 @@ module.exports = class productPanelHandler extends handler {
 				.setTitle('🛍️ Product Download Panel')
 				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
 				.setColor(panel.embed_color || '#0099ff')
-				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private.` })
+				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Downloads are private` })
 				.setTimestamp();
 
 			if (panel.thumbnail_url) {
@@ -382,16 +314,22 @@ module.exports = class productPanelHandler extends handler {
 				components: buttons
 			});
 
-			// Store message ID for future reference
-			this.panelMessages.set(`${channel.id}-legacy`, message.id);
+			// Store message ID for tracking
+			const messageKey = `${channel.id}-legacy`;
+			this.panelMessages.set(messageKey, message.id);
+			await this.savePanelMessagesToDatabase();
 
-			// Set up button collector that doesn't expire
+			// Set up persistent button collector
 			const collector = message.createMessageComponentCollector({
-				filter: (interaction) => interaction.customId.startsWith(`iynx:athenabot:productPanel:channel_product_`),
+				filter: (interaction) => interaction.customId.startsWith(`setup:product:`),
 			});
 
 			collector.on('collect', async (buttonInteraction) => {
 				await this.handleChannelButtonInteraction(buttonInteraction, 'legacy');
+			});
+
+			collector.on('error', (err) => {
+				this.heart.core.console.log(this.heart.core.console.type.error, 'Collector error for legacy panel:', err);
 			});
 
 		} catch (err) {
@@ -415,7 +353,7 @@ module.exports = class productPanelHandler extends handler {
 
 			for (const product of rowProducts) {
 				const button = new ButtonBuilder()
-					.setCustomId(`iynx:athenabot:productPanel:channel_product_${product.id}:${panelId}`)
+					.setCustomId(`setup:product:${product.id}:${panelId}`)
 					.setLabel(product.name)
 					.setStyle(ButtonStyle.Primary);
 
@@ -441,8 +379,7 @@ module.exports = class productPanelHandler extends handler {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
 			const customIdParts = buttonInteraction.customId.split(':');
-			const productInfo = customIdParts[customIdParts.length - 2]; // Get product_id part
-			const productId = productInfo.replace('channel_product_', '');
+			const productId = customIdParts[2];
 			
 			let product;
 
@@ -474,7 +411,7 @@ module.exports = class productPanelHandler extends handler {
 				}).join(', ');
 
 				return await buttonInteraction.reply({
-					content: `❌ You don't have the required role(s) to download this product.\nRequired roles: ${roleNames}`,
+					content: `❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
 					ephemeral: true
 				});
 			}
@@ -492,26 +429,32 @@ module.exports = class productPanelHandler extends handler {
 			const attachment = new AttachmentBuilder(filePath, { name: product.download_name || product.file_path });
 
 			const downloadEmbed = new EmbedBuilder()
-				.setTitle('✅ Product Downloaded')
-				.setDescription(`**${product.name}**\n${product.description || 'No description available.'}`)
+				.setTitle('✅ Download Ready')
+				.setDescription(`**${product.name}**\n\n${product.description || 'No description available.'}`)
+				.addFields(
+					{ name: 'File Name', value: product.download_name || product.file_path, inline: true },
+					{ name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : panelId, inline: true },
+					{ name: 'Source', value: 'Channel Panel', inline: true }
+				)
 				.setColor('#00ff00')
-				.setFooter({ text: 'This download is private and only visible to you.' })
+				.setFooter({ text: 'Download is private and only visible to you' })
 				.setTimestamp();
 
 			await buttonInteraction.reply({
 				embeds: [downloadEmbed],
 				files: [attachment],
-				ephemeral: true // Keep downloads ephemeral for privacy
+				ephemeral: true
 			});
 
 			// Log download activity
 			this.heart.core.console.log(
 				this.heart.core.console.type.log, 
-				`User ${buttonInteraction.user.tag} (${buttonInteraction.user.id}) downloaded product: ${product.name} from channel panel: ${panelId}`
+				`Channel download: ${buttonInteraction.user.tag} (${buttonInteraction.user.id}) downloaded "${product.name}" from panel "${panelId}" in ${buttonInteraction.channel.name}`
 			);
 
-			// Optional: Save to database for tracking
-			if (productConfig.config.logging?.track_downloads) {
+			// Save to database for tracking
+			const loggingConfig = productConfig.config.logging || {};
+			if (loggingConfig.track_downloads && loggingConfig.log_channel_downloads !== false) {
 				try {
 					const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
 					const downloads = userDoc.downloads || [];
@@ -520,6 +463,7 @@ module.exports = class productPanelHandler extends handler {
 						product_name: product.name,
 						panel_id: panelId,
 						source: 'channel_panel',
+						channel_id: buttonInteraction.channel.id,
 						timestamp: new Date(),
 						guild_id: buttonInteraction.guild.id
 					});
@@ -533,19 +477,19 @@ module.exports = class productPanelHandler extends handler {
 			}
 
 			// Log to channel if enabled
-			if (productConfig.config.logging?.log_to_channel && productConfig.config.logging.log_channel_id) {
-				const logChannel = buttonInteraction.guild.channels.cache.get(productConfig.config.logging.log_channel_id);
+			if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_channel_downloads !== false) {
+				const logChannel = buttonInteraction.guild.channels.cache.get(loggingConfig.log_channel_id);
 				if (logChannel) {
 					const logEmbed = new EmbedBuilder()
-						.setTitle('📥 Product Downloaded (Channel Panel)')
+						.setTitle('📥 Channel Panel Download')
 						.addFields(
 							{ name: 'User', value: `${buttonInteraction.user.tag} (${buttonInteraction.user.id})`, inline: true },
 							{ name: 'Product', value: product.name, inline: true },
 							{ name: 'Panel', value: panelId, inline: true },
-							{ name: 'Source', value: 'Channel Panel', inline: true },
+							{ name: 'Channel', value: `${buttonInteraction.channel.name} (${buttonInteraction.channel.id})`, inline: true },
 							{ name: 'Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
 						)
-						.setColor('#00ff00')
+						.setColor('#ff6600')
 						.setTimestamp();
 
 					await logChannel.send({ embeds: [logEmbed] });
@@ -557,12 +501,10 @@ module.exports = class productPanelHandler extends handler {
 			
 			if (!buttonInteraction.replied) {
 				await buttonInteraction.reply({
-					content: '❌ An error occurred while processing your request.',
+					content: '❌ An error occurred while processing your download.',
 					ephemeral: true
 				});
 			}
 		}
 	}
-
-
 };
