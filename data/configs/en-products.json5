@@ -26,10 +26,10 @@
 // # |                                                                                              | #
 // # |  Product:     Athena Bot                                                                     | #
 // # |  Version:     2.4.0                                                                          | #
-// # |  Config:      ProductPanel                                                                   | #
+// # |  Config:      ProductPanel (Manual Mode)                                                     | #
 // # |                                                                                              | #
 // # |                                                                                              | #
-// # |  New options are added to this file automatically.                                           | #
+// # |  Manual setup only - use /productpanel setup channel to create panels                       | #
 // # +----------------------------------------------------------------------------------------------+ #
 // ####################################################################################################
 {
@@ -136,11 +136,11 @@
             channel_setup: 'admin'   // Who can use /productpanel setup
         },
 
-        // Logging only (no channel automation)
+        // Logging settings
         logging: {
             track_downloads: true,  // Record downloads in database
-            log_to_channel: false,   // Disabled channel logging
-            log_channel_id: ""      // Not used
+            log_to_channel: false,   // Log downloads to a channel
+            log_channel_id: ""      // Channel ID for logging (if enabled)
         }
     }
 }
