@@ -1,4 +1,4 @@
-// src/handler/productPanelHandler.js - Optimized handler with separate functionality
+// src/handler/productPanelHandler.js - Fixed handler with proper error handling
 const handler = require('../../../../main/discord/core/handler/handler.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
@@ -12,25 +12,43 @@ const path = require('path');
 module.exports = class productPanelHandler extends handler {
 	constructor(heart) {
 		super(heart, 'productPanel');
-		heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
+		
+		// Initialize cache
+		try {
+			heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error registering product cache:', err);
+		}
 		
 		// Store panel message IDs for tracking
 		this.panelMessages = new Map(); // key: "channelId-panelId", value: messageId
 		
-		// Load existing panel messages from database on startup
-		this.loadPanelMessagesFromDatabase();
+		// Don't load from database immediately - wait for client to be ready
+		this.databaseLoaded = false;
 	}
 
 	getCache() {
-		return this.heart.core.discord.core.cache.manager.get('productCache');
+		try {
+			return this.heart.core.discord.core.cache.manager.get('productCache');
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error getting product cache:', err);
+			return null;
+		}
 	}
 
 	/**
 	 * Load panel message tracking from database
 	 */
 	async loadPanelMessagesFromDatabase() {
+		if (this.databaseLoaded) return; // Already loaded
+		
 		try {
 			const cache = this.getCache();
+			if (!cache) {
+				this.heart.core.console.log(this.heart.core.console.type.warning, 'Product cache not available, skipping database load');
+				return;
+			}
+
 			const panelData = await cache.get('panel_messages');
 			if (panelData) {
 				this.panelMessages = new Map(Object.entries(panelData));
@@ -39,6 +57,7 @@ module.exports = class productPanelHandler extends handler {
 					`Loaded ${this.panelMessages.size} panel messages from database`
 				);
 			}
+			this.databaseLoaded = true;
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error loading panel messages from database:', err);
 		}
@@ -50,6 +69,11 @@ module.exports = class productPanelHandler extends handler {
 	async savePanelMessagesToDatabase() {
 		try {
 			const cache = this.getCache();
+			if (!cache) {
+				this.heart.core.console.log(this.heart.core.console.type.warning, 'Product cache not available, skipping database save');
+				return;
+			}
+
 			const panelData = Object.fromEntries(this.panelMessages);
 			await cache.set('panel_messages', panelData);
 		} catch (err) {
@@ -75,7 +99,9 @@ module.exports = class productPanelHandler extends handler {
 	async clearAllPanelMessagesFromDatabase() {
 		try {
 			const cache = this.getCache();
-			await cache.delete('panel_messages');
+			if (cache) {
+				await cache.delete('panel_messages');
+			}
 			this.panelMessages.clear();
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error clearing panel messages from database:', err);
@@ -91,9 +117,13 @@ module.exports = class productPanelHandler extends handler {
 	async setupPanelInChannel(panelId, panel, targetChannel) {
 		try {
 			// Check permissions
-			if (!targetChannel.permissionsFor(targetChannel.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
+			const botPermissions = targetChannel.permissionsFor(targetChannel.guild.members.me);
+			if (!botPermissions || !botPermissions.has(['SendMessages', 'EmbedLinks'])) {
 				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
 			}
+
+			// Ensure database is loaded
+			await this.loadPanelMessagesFromDatabase();
 
 			// Check if panel already exists in this channel
 			const existingKey = `${targetChannel.id}-${panelId}`;
@@ -107,6 +137,7 @@ module.exports = class productPanelHandler extends handler {
 				} catch (fetchErr) {
 					// Message doesn't exist anymore, remove from tracking
 					this.panelMessages.delete(existingKey);
+					await this.savePanelMessagesToDatabase();
 				}
 			}
 
@@ -130,12 +161,16 @@ module.exports = class productPanelHandler extends handler {
 	async setupLegacyPanelInChannel(targetChannel) {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			const panel = productConfig.config.panel || {};
+			const panel = productConfig.config.legacy?.panel || {};
 			
 			// Check permissions
-			if (!targetChannel.permissionsFor(targetChannel.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
+			const botPermissions = targetChannel.permissionsFor(targetChannel.guild.members.me);
+			if (!botPermissions || !botPermissions.has(['SendMessages', 'EmbedLinks'])) {
 				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
 			}
+
+			// Ensure database is loaded
+			await this.loadPanelMessagesFromDatabase();
 
 			// Check if legacy panel already exists in this channel
 			const existingKey = `${targetChannel.id}-legacy`;
@@ -149,6 +184,7 @@ module.exports = class productPanelHandler extends handler {
 				} catch (fetchErr) {
 					// Message doesn't exist anymore, remove from tracking
 					this.panelMessages.delete(existingKey);
+					await this.savePanelMessagesToDatabase();
 				}
 			}
 
@@ -179,13 +215,19 @@ module.exports = class productPanelHandler extends handler {
 
 			this.heart.core.console.log(this.heart.core.console.type.log, `Starting clear of ${this.panelMessages.size} panel messages...`);
 
+			// Get Discord client
+			const client = this.heart.core.discord?.client;
+			if (!client) {
+				throw new Error('Discord client not available');
+			}
+
 			// Clear all tracked panel messages
 			for (const [messageKey, messageId] of this.panelMessages.entries()) {
 				try {
 					const [channelId, panelId] = messageKey.split('-');
 					
 					// Get the channel
-					const channel = this.heart.core.discord.client.channels.cache.get(channelId);
+					const channel = client.channels.cache.get(channelId);
 					if (!channel) {
 						this.heart.core.console.log(this.heart.core.console.type.warning, `Channel ${channelId} not found, removing from tracking`);
 						continue;
@@ -241,6 +283,13 @@ module.exports = class productPanelHandler extends handler {
 	 */
 	async createPanelMessage(channel, panelId, panel) {
 		try {
+			// Get enabled products only
+			const enabledProducts = (panel.products || []).filter(p => p.enabled !== false);
+			
+			if (enabledProducts.length === 0) {
+				throw new Error(`Panel ${panelId} has no enabled products`);
+			}
+
 			// Create embed
 			const embed = new EmbedBuilder()
 				.setTitle(panel.title || '🛍️ Product Download Panel')
@@ -254,7 +303,11 @@ module.exports = class productPanelHandler extends handler {
 			}
 
 			// Create buttons for products
-			const buttons = this.createChannelProductButtons(panel.products || [], panelId);
+			const buttons = this.createChannelProductButtons(enabledProducts, panelId);
+
+			if (buttons.length === 0) {
+				throw new Error(`No buttons created for panel ${panelId}`);
+			}
 
 			const message = await channel.send({
 				embeds: [embed],
@@ -293,10 +346,18 @@ module.exports = class productPanelHandler extends handler {
 	async createLegacyPanelMessage(channel, panel) {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const legacyProducts = productConfig.config.legacy?.products || [];
+			
+			// Get enabled products only
+			const enabledProducts = legacyProducts.filter(p => p.enabled !== false);
+			
+			if (enabledProducts.length === 0) {
+				throw new Error('Legacy panel has no enabled products');
+			}
 
 			// Create embed
 			const embed = new EmbedBuilder()
-				.setTitle('🛍️ Product Download Panel')
+				.setTitle(panel.title || '🛍️ Product Download Panel')
 				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
 				.setColor(panel.embed_color || '#0099ff')
 				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Downloads are private` })
@@ -307,7 +368,11 @@ module.exports = class productPanelHandler extends handler {
 			}
 
 			// Create buttons for legacy products
-			const buttons = this.createChannelProductButtons(productConfig.config.products || [], 'legacy');
+			const buttons = this.createChannelProductButtons(enabledProducts, 'legacy');
+
+			if (buttons.length === 0) {
+				throw new Error('No buttons created for legacy panel');
+			}
 
 			const message = await channel.send({
 				embeds: [embed],
@@ -346,25 +411,40 @@ module.exports = class productPanelHandler extends handler {
 	 */
 	createChannelProductButtons(products, panelId) {
 		const buttons = [];
+		const maxProducts = 25; // Discord limit: 5 rows x 5 buttons
 
-		for (let i = 0; i < products.length; i += 5) {
+		// Limit to Discord's button constraints
+		const limitedProducts = products.slice(0, maxProducts);
+
+		for (let i = 0; i < limitedProducts.length; i += 5) {
 			const row = new ActionRowBuilder();
-			const rowProducts = products.slice(i, i + 5);
+			const rowProducts = limitedProducts.slice(i, i + 5);
 
 			for (const product of rowProducts) {
-				const button = new ButtonBuilder()
-					.setCustomId(`setup:product:${product.id}:${panelId}`)
-					.setLabel(product.name)
-					.setStyle(ButtonStyle.Primary);
+				try {
+					const button = new ButtonBuilder()
+						.setCustomId(`setup:product:${product.id}:${panelId}`)
+						.setLabel(product.name.length > 80 ? product.name.substring(0, 77) + '...' : product.name)
+						.setStyle(ButtonStyle.Primary);
 
-				if (product.emoji) {
-					button.setEmoji(product.emoji);
+					if (product.emoji) {
+						try {
+							button.setEmoji(product.emoji);
+						} catch (emojiErr) {
+							// Invalid emoji, skip setting it
+							this.heart.core.console.log(this.heart.core.console.type.warning, `Invalid emoji for product ${product.id}: ${product.emoji}`);
+						}
+					}
+
+					row.addComponents(button);
+				} catch (buttonErr) {
+					this.heart.core.console.log(this.heart.core.console.type.error, `Error creating button for product ${product.id}:`, buttonErr);
 				}
-
-				row.addComponents(button);
 			}
 
-			buttons.push(row);
+			if (row.components.length > 0) {
+				buttons.push(row);
+			}
 		}
 
 		return buttons;
@@ -385,33 +465,42 @@ module.exports = class productPanelHandler extends handler {
 
 			// Find product in the correct panel or legacy products
 			if (panelId === 'legacy') {
-				product = productConfig.config.products?.find(p => p.id === productId);
+				product = productConfig.config.legacy?.products?.find(p => p.id === productId);
 			} else {
-				const panel = productConfig.config.panels[panelId];
+				const panel = productConfig.config.panels?.[panelId];
 				product = panel?.products?.find(p => p.id === productId);
 			}
 
 			if (!product) {
 				return await buttonInteraction.reply({
-					content: '❌ Product not found.',
+					content: productConfig.config.advanced?.error_messages?.panel_not_found || '❌ Product not found.',
+					ephemeral: true
+				});
+			}
+
+			// Check if product is enabled
+			if (product.enabled === false) {
+				return await buttonInteraction.reply({
+					content: '❌ This product is currently disabled.',
 					ephemeral: true
 				});
 			}
 
 			// Check if user has required role
 			const member = buttonInteraction.member;
-			const hasRequiredRole = product.required_roles.some(roleId => 
+			const hasRequiredRole = product.required_roles?.some(roleId => 
 				member.roles.cache.has(roleId)
 			);
 
 			if (!hasRequiredRole) {
-				const roleNames = product.required_roles.map(roleId => {
+				const roleNames = product.required_roles?.map(roleId => {
 					const role = buttonInteraction.guild.roles.cache.get(roleId);
 					return role ? role.name : 'Unknown Role';
-				}).join(', ');
+				}).join(', ') || 'Required roles not configured';
 
 				return await buttonInteraction.reply({
-					content: `❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
+					content: productConfig.config.advanced?.error_messages?.no_permission ||
+						`❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
 					ephemeral: true
 				});
 			}
@@ -420,7 +509,8 @@ module.exports = class productPanelHandler extends handler {
 			const filePath = path.join(__dirname, '../../data/products/', product.file_path);
 			if (!fs.existsSync(filePath)) {
 				return await buttonInteraction.reply({
-					content: '❌ Product file not found. Please contact an administrator.',
+					content: productConfig.config.advanced?.error_messages?.file_not_found ||
+						'❌ Product file not found. Please contact an administrator.',
 					ephemeral: true
 				});
 			}
@@ -433,7 +523,7 @@ module.exports = class productPanelHandler extends handler {
 				.setDescription(`**${product.name}**\n\n${product.description || 'No description available.'}`)
 				.addFields(
 					{ name: 'File Name', value: product.download_name || product.file_path, inline: true },
-					{ name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : panelId, inline: true },
+					{ name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : (productConfig.config.panels?.[panelId]?.name || panelId), inline: true },
 					{ name: 'Source', value: 'Channel Panel', inline: true }
 				)
 				.setColor('#00ff00')
@@ -452,32 +542,53 @@ module.exports = class productPanelHandler extends handler {
 				`Channel download: ${buttonInteraction.user.tag} (${buttonInteraction.user.id}) downloaded "${product.name}" from panel "${panelId}" in ${buttonInteraction.channel.name}`
 			);
 
-			// Save to database for tracking
-			const loggingConfig = productConfig.config.logging || {};
-			if (loggingConfig.track_downloads && loggingConfig.log_channel_downloads !== false) {
-				try {
-					const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
-					const downloads = userDoc.downloads || [];
-					downloads.push({
-						product_id: product.id,
-						product_name: product.name,
-						panel_id: panelId,
-						source: 'channel_panel',
-						channel_id: buttonInteraction.channel.id,
-						timestamp: new Date(),
-						guild_id: buttonInteraction.guild.id
-					});
-					
-					await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
-						downloads: downloads 
-					});
-				} catch (dbErr) {
-					this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving download to database:', dbErr);
-				}
-			}
+			// Save to database for tracking and log to channel
+			await this.trackChannelDownload(buttonInteraction, productConfig, product, panelId);
 
-			// Log to channel if enabled
-			if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_channel_downloads !== false) {
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error handling channel button interaction:', err);
+			
+			if (!buttonInteraction.replied) {
+				await buttonInteraction.reply({
+					content: '❌ An error occurred while processing your download.',
+					ephemeral: true
+				});
+			}
+		}
+	}
+
+	/**
+	 * Track channel download in database and log to channel
+	 */
+	async trackChannelDownload(buttonInteraction, productConfig, product, panelId) {
+		const loggingConfig = productConfig.config.logging || {};
+
+		// Save to database for tracking
+		if (loggingConfig.track_downloads && loggingConfig.log_channel_downloads !== false) {
+			try {
+				const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
+				const downloads = userDoc.downloads || [];
+				downloads.push({
+					product_id: product.id,
+					product_name: product.name,
+					panel_id: panelId,
+					source: 'channel_panel',
+					channel_id: buttonInteraction.channel.id,
+					timestamp: new Date(),
+					guild_id: buttonInteraction.guild.id
+				});
+				
+				await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
+					downloads: downloads 
+				});
+			} catch (dbErr) {
+				this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving download to database:', dbErr);
+			}
+		}
+
+		// Log to channel if enabled
+		if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_channel_downloads !== false) {
+			try {
 				const logChannel = buttonInteraction.guild.channels.cache.get(loggingConfig.log_channel_id);
 				if (logChannel) {
 					const logEmbed = new EmbedBuilder()
@@ -494,16 +605,8 @@ module.exports = class productPanelHandler extends handler {
 
 					await logChannel.send({ embeds: [logEmbed] });
 				}
-			}
-
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error handling channel button interaction:', err);
-			
-			if (!buttonInteraction.replied) {
-				await buttonInteraction.reply({
-					content: '❌ An error occurred while processing your download.',
-					ephemeral: true
-				});
+			} catch (logErr) {
+				this.heart.core.console.log(this.heart.core.console.type.error, 'Error logging to channel:', logErr);
 			}
 		}
 	}

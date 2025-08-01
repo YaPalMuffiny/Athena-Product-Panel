@@ -1,4 +1,4 @@
-// main.js - Updated plugin with optimized configuration support
+// main.js - Fixed plugin with proper initialization timing
 const plugin = require('../../main/discord/core/plugins/plugin.js');
 const productPanelHandler = require('./src/handler/productPanelHandler.js');
 
@@ -93,7 +93,7 @@ module.exports = class productPanel extends plugin {
 		const loadProductConfig = await this.heart.core.discord.core.config.manager.load(productConfig);
 		if (!loadProductConfig) {
 			this.setDisabled();
-			this.heart.core.console.log(this.heart.core.console.type.error, `Disabling plugin ${this.getName()}...`);
+			this.heart.core.console.log(this.heart.core.console.type.error, `Failed to load config, disabling plugin ${this.getName()}...`);
 			return;
 		}
 
@@ -104,30 +104,47 @@ module.exports = class productPanel extends plugin {
 			this.heart.core.console.log(this.heart.core.console.type.error, `Invalid configuration, disabling plugin ${this.getName()}...`);
 			return;
 		}
+
+		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin pre-load completed successfully');
 	}
 
 	async load() {
 		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin is loading...');
+		
+		// Register handler first
 		const handler = new productPanelHandler(this.heart);
 		this.heart.core.discord.core.handler.manager.register(handler);
 
-		// Get client from heart
-		const client = this.heart.core.discord?.client;
-		if (!client) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Discord client not available');
-			return;
-		}
-		if (!this.heart.core.discord?.core?.handler?.manager) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Handler manager not available');
-			return;
-		}
-
+		// Don't check for client here - it may not be ready yet
+		// The handler will handle client interactions when they occur
+		
 		// Log configuration status
 		const stats = this.getConfigurationStats();
 		this.heart.core.console.log(
 			this.heart.core.console.type.startup, 
 			`Product Panel plugin loaded successfully - ${stats.total_panels} panels, ${stats.total_products} products configured`
 		);
+	}
+
+	/**
+	 * Called when the Discord client is ready (post-load initialization)
+	 */
+	async postLoad() {
+		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin post-loading...');
+		
+		// Now client should be available - perform any client-dependent initialization
+		const client = this.heart.core.discord?.client;
+		if (client) {
+			this.heart.core.console.log(this.heart.core.console.type.startup, 'Discord client is now available for Product Panel plugin');
+			
+			// Load existing panel messages from database
+			const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
+			if (handler) {
+				await handler.loadPanelMessagesFromDatabase();
+			}
+		} else {
+			this.heart.core.console.log(this.heart.core.console.type.warning, 'Discord client still not available in post-load phase');
+		}
 	}
 
 	/**
@@ -158,11 +175,12 @@ module.exports = class productPanel extends plugin {
 					}
 
 					// Check product limits
+					const maxProducts = productConfig.config.global?.max_products_per_panel || 25;
 					const enabledProducts = panel.products.filter(p => p.enabled !== false);
-					if (enabledProducts.length > productConfig.config.global.max_products_per_panel) {
+					if (enabledProducts.length > maxProducts) {
 						this.heart.core.console.log(
 							this.heart.core.console.type.warning, 
-							`Panel "${panelId}" has ${enabledProducts.length} products, exceeding limit of ${productConfig.config.global.max_products_per_panel}`
+							`Panel "${panelId}" has ${enabledProducts.length} products, exceeding limit of ${maxProducts}`
 						);
 					}
 
@@ -181,7 +199,7 @@ module.exports = class productPanel extends plugin {
 			}
 
 			// Validate file extensions if restricted
-			const allowedExtensions = productConfig.config.advanced.allowed_extensions;
+			const allowedExtensions = productConfig.config.advanced?.allowed_extensions;
 			if (allowedExtensions && allowedExtensions.length > 0) {
 				// Validate all configured products have allowed extensions
 				const allProducts = this.getAllConfiguredProducts();
@@ -292,7 +310,7 @@ module.exports = class productPanel extends plugin {
 			
 			return {
 				...configStats,
-				active_channel_panels: handler.panelMessages?.size || 0
+				active_channel_panels: handler?.panelMessages?.size || 0
 			};
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error getting panel stats:', err);
