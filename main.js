@@ -39,15 +39,23 @@ module.exports = class productPanel extends plugin {
 			{ name: 'products', plugin: this.getName() },
 			{
 				config: {
+					panels: undefined,
 					panel: {
 						description: undefined,
 						embed_color: undefined,
 						thumbnail_url: undefined,
 						footer_text: undefined,
+						channel_id: undefined,
 					},
 					products: undefined,
 					permissions: {
 						panel_command: undefined,
+						channel_setup: undefined,
+					},
+					channels: {
+						auto_setup: undefined,
+						update_interval: undefined,
+						delete_old_messages: undefined,
 					},
 					logging: {
 						track_downloads: undefined,
@@ -68,6 +76,47 @@ module.exports = class productPanel extends plugin {
 
 	async load() {
 		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin is loading...');
-		this.heart.core.discord.core.handler.manager.register(new productPanelHandler(this.heart));
+		const handler = new productPanelHandler(this.heart);
+		this.heart.core.discord.core.handler.manager.register(handler);
+
+		// Setup automatic channel panels if enabled
+		const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+		if (productConfig.config.channels?.auto_setup) {
+			this.setupChannelPanels();
+			
+			// Setup interval for updating panels
+			if (productConfig.config.channels.update_interval) {
+				setInterval(() => {
+					this.setupChannelPanels();
+				}, productConfig.config.channels.update_interval);
+			}
+		}
+	}
+
+	/**
+	 * Sets up product panels in designated channels.
+	 */
+	async setupChannelPanels() {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
+
+			// Setup panels for multi-panel configuration
+			if (productConfig.config.panels) {
+				for (const [panelId, panel] of Object.entries(productConfig.config.panels)) {
+					if (panel.channel_id) {
+						await handler.setupPanelInChannel(panelId, panel);
+					}
+				}
+			}
+
+			// Setup legacy panel if configured
+			if (productConfig.config.panel?.channel_id) {
+				await handler.setupLegacyPanelInChannel();
+			}
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error setting up channel panels:', err);
+		}
 	}
 };

@@ -29,7 +29,7 @@ module.exports = class productPanel extends command {
 			name: 'productpanel',
 			data: new SlashCommandBuilder()
 				.setName(cmdConfig.commands.productpanel?.name || 'productpanel')
-				.setDescription(cmdConfig.commands.productpanel?.description || 'Display the product download panel')
+				.setDescription(cmdConfig.commands.productpanel?.description || 'Display the product download panel (personal and private)')
 				.addStringOption(option =>
 					option.setName('panel')
 						.setDescription('Select which panel to display')
@@ -109,9 +109,10 @@ module.exports = class productPanel extends command {
 	 */
 	async showPanelSelection(interaction, productConfig) {
 		const embed = new EmbedBuilder()
-			.setTitle('🛍️ Product Panel Selection')
+			.setTitle('🛍️ Personal Product Panel Selection')
 			.setDescription('Please select which product panel you want to view:')
 			.setColor('#0099ff')
+			.setFooter({ text: 'This is your personal product panel - only you can see this.' })
 			.setTimestamp();
 
 		const selectMenu = new StringSelectMenuBuilder()
@@ -133,7 +134,7 @@ module.exports = class productPanel extends command {
 		const reply = await interaction.reply({
 			embeds: [embed],
 			components: [row],
-			ephemeral: false
+			ephemeral: true // Make it ephemeral
 		});
 
 		// Set up select menu collector
@@ -169,14 +170,11 @@ module.exports = class productPanel extends command {
 			.setTitle(panel.title || '🛍️ Product Download Panel')
 			.setDescription(panel.description || 'Select a product below to download:')
 			.setColor(panel.embed_color || '#0099ff')
+			.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Personal Panel - Only you can see this.` })
 			.setTimestamp();
 
 		if (panel.thumbnail_url) {
 			embed.setThumbnail(panel.thumbnail_url);
-		}
-
-		if (panel.footer_text) {
-			embed.setFooter({ text: panel.footer_text });
 		}
 
 		// Create buttons for products in this panel
@@ -219,14 +217,11 @@ module.exports = class productPanel extends command {
 			.setTitle(panel.title || '🛍️ Product Download Panel')
 			.setDescription(panel.description || 'Select a product below to download:')
 			.setColor(panel.embed_color || '#0099ff')
+			.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Personal Panel - Only you can see this.` })
 			.setTimestamp();
 
 		if (panel.thumbnail_url) {
 			embed.setThumbnail(panel.thumbnail_url);
-		}
-
-		if (panel.footer_text) {
-			embed.setFooter({ text: panel.footer_text });
 		}
 
 		// Create buttons for products in this panel
@@ -235,7 +230,7 @@ module.exports = class productPanel extends command {
 		const reply = await interaction.reply({
 			embeds: [embed],
 			components: buttons,
-			ephemeral: false
+			ephemeral: true // Make it ephemeral
 		});
 
 		// Set up button collector
@@ -258,17 +253,14 @@ module.exports = class productPanel extends command {
 	async showLegacyPanel(interaction, productConfig) {
 		// Create embed
 		const embed = new EmbedBuilder()
-			.setTitle('🛍️ Product Download Panel')
+			.setTitle('🛍️ Personal Product Download Panel')
 			.setDescription(productConfig.config.panel.description || 'Select a product below to download:')
 			.setColor(productConfig.config.panel.embed_color || '#0099ff')
+			.setFooter({ text: `${productConfig.config.panel.footer_text || 'Product Downloads'} • Personal Panel - Only you can see this.` })
 			.setTimestamp();
 
 		if (productConfig.config.panel.thumbnail_url) {
 			embed.setThumbnail(productConfig.config.panel.thumbnail_url);
-		}
-
-		if (productConfig.config.panel.footer_text) {
-			embed.setFooter({ text: productConfig.config.panel.footer_text });
 		}
 
 		// Create buttons for legacy products
@@ -277,7 +269,7 @@ module.exports = class productPanel extends command {
 		const reply = await interaction.reply({
 			embeds: [embed],
 			components: buttons,
-			ephemeral: false
+			ephemeral: true // Make it ephemeral
 		});
 
 		// Set up button collector
@@ -384,12 +376,13 @@ module.exports = class productPanel extends command {
 				.setTitle('✅ Product Downloaded')
 				.setDescription(`**${product.name}**\n${product.description || 'No description available.'}`)
 				.setColor('#00ff00')
+				.setFooter({ text: 'This download is private and only visible to you.' })
 				.setTimestamp();
 
 			await buttonInteraction.reply({
 				embeds: [downloadEmbed],
 				files: [attachment],
-				ephemeral: true
+				ephemeral: true // Keep downloads ephemeral for privacy
 			});
 
 			// Log download activity
