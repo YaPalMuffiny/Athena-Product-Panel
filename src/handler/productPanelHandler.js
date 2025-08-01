@@ -1,12 +1,11 @@
-// src/handler/productPanelHandler.js - Enhanced handler with auto-update functionality
+// src/handler/productPanelHandler.js - Manual-only handler
 const handler = require('../../../../main/discord/core/handler/handler.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 
 /**
- * Enhanced product panel handler with auto-update functionality.
+ * Product panel handler with manual-only functionality.
  * @class
  * @extends handlerType
  */
@@ -15,66 +14,8 @@ module.exports = class productPanelHandler extends handler {
 		super(heart, 'productPanel');
 		heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
 		
-		// Store panel message IDs and their config hashes for tracking changes
-		this.panelMessages = new Map();
-		this.configHashes = new Map();
-		
-		this.initializeConfigHashes();
-	}
-
-	/**
-	 * Initialize config hashes for change detection.
-	 */
-	initializeConfigHashes() {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			
-			// Hash each panel configuration
-			if (productConfig.config.panels) {
-				Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
-					const panelHash = this.generateConfigHash(panel);
-					this.configHashes.set(panelId, panelHash);
-				});
-			}
-			
-			// Hash legacy configuration
-			if (productConfig.config.products) {
-				const legacyHash = this.generateConfigHash({
-					panel: productConfig.config.panel,
-					products: productConfig.config.products
-				});
-				this.configHashes.set('legacy', legacyHash);
-			}
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error initializing config hashes:', err);
-		}
-	}
-
-	/**
-	 * Generate a hash for configuration comparison.
-	 * @param {Object} config - The configuration object to hash.
-	 * @returns {string} The generated hash.
-	 */
-	generateConfigHash(config) {
-		return crypto.createHash('md5').update(JSON.stringify(config)).digest('hex');
-	}
-
-	/**
-	 * Check if panel configuration has changed.
-	 * @param {string} panelId - The panel ID to check.
-	 * @param {Object} currentConfig - The current panel configuration.
-	 * @returns {boolean} True if configuration has changed.
-	 */
-	hasConfigChanged(panelId, currentConfig) {
-		const currentHash = this.generateConfigHash(currentConfig);
-		const storedHash = this.configHashes.get(panelId);
-		
-		if (currentHash !== storedHash) {
-			this.configHashes.set(panelId, currentHash);
-			return true;
-		}
-		
-		return false;
+		// Store panel message IDs for tracking
+		this.panelMessages = new Map(); // key: "channelId-panelId", value: messageId
 	}
 
 	getCache() {
@@ -135,134 +76,70 @@ module.exports = class productPanelHandler extends handler {
 	}
 
 	/**
-	 * Auto-setup panels based on config (called on bot restart).
+	 * Refresh all existing panel messages (used by /refresh command).
 	 */
-	async autoSetupChannelPanels() {
+	async refreshAllPanelMessages() {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			let refreshCount = 0;
+			let errorCount = 0;
 
-			// Setup panels for multi-panel configuration
-			if (productConfig.config.panels) {
-				for (const [panelId, panel] of Object.entries(productConfig.config.panels)) {
-					if (panel.channel_id) {
-						await this.autoSetupPanel(panelId, panel);
-					}
-				}
-			}
+			this.heart.core.console.log(this.heart.core.console.type.log, `Starting refresh of ${this.panelMessages.size} panel messages...`);
 
-			// Setup legacy panel if configured
-			if (productConfig.config.panel?.channel_id && productConfig.config.products?.length > 0) {
-				await this.autoSetupLegacyPanel();
-			}
-
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in auto-setup channel panels:', err);
-		}
-	}
-
-	/**
-	 * Auto-setup a specific panel and check for updates.
-	 * @param {string} panelId - The panel ID.
-	 * @param {Object} panel - The panel configuration.
-	 */
-	async autoSetupPanel(panelId, panel) {
-		try {
-			// Check if configuration has changed
-			const hasChanged = this.hasConfigChanged(panelId, panel);
-
-			// Get all guilds the bot is in
-			for (const [guildId, guild] of this.heart.core.discord.client.guilds.cache) {
-				const channel = guild.channels.cache.get(panel.channel_id);
-				if (!channel) continue;
-
-				// Check permissions
-				if (!channel.permissionsFor(guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
-					this.heart.core.console.log(
-						this.heart.core.console.type.warning,
-						`Missing permissions in channel ${channel.name} (${channel.id}) for panel ${panelId}`
-					);
-					continue;
-				}
-
-				const messageKey = `${channel.id}-${panelId}`;
-				const existingMessageId = this.panelMessages.get(messageKey);
-
-				if (existingMessageId && !hasChanged) {
-					// Message exists and config hasn't changed, check if message still exists
-					try {
-						await channel.messages.fetch(existingMessageId);
-						continue; // Message exists, no need to update
-					} catch (err) {
-						// Message was deleted, create new one
+			// Refresh all tracked panel messages
+			for (const [messageKey, messageId] of this.panelMessages.entries()) {
+				try {
+					const [channelId, panelId] = messageKey.split('-');
+					
+					// Get the channel
+					const channel = this.heart.core.discord.client.channels.cache.get(channelId);
+					if (!channel) {
+						this.heart.core.console.log(this.heart.core.console.type.warning, `Channel ${channelId} not found, removing from tracking`);
 						this.panelMessages.delete(messageKey);
+						continue;
 					}
-				}
 
-				if (hasChanged && existingMessageId) {
-					// Configuration changed, update existing message
-					await this.updatePanelMessage(channel, panelId, panel, existingMessageId);
-				} else {
-					// Create new message
-					await this.createPanelMessage(channel, panelId, panel);
-				}
-			}
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, `Error auto-setting up panel ${panelId}:`, err);
-		}
-	}
-
-	/**
-	 * Auto-setup legacy panel and check for updates.
-	 */
-	async autoSetupLegacyPanel() {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			const legacyConfig = {
-				panel: productConfig.config.panel,
-				products: productConfig.config.products
-			};
-
-			// Check if configuration has changed
-			const hasChanged = this.hasConfigChanged('legacy', legacyConfig);
-
-			// Get all guilds the bot is in
-			for (const [guildId, guild] of this.heart.core.discord.client.guilds.cache) {
-				const channel = guild.channels.cache.get(productConfig.config.panel.channel_id);
-				if (!channel) continue;
-
-				// Check permissions
-				if (!channel.permissionsFor(guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
-					this.heart.core.console.log(
-						this.heart.core.console.type.warning,
-						`Missing permissions in channel ${channel.name} (${channel.id}) for legacy panel`
-					);
-					continue;
-				}
-
-				const messageKey = `${channel.id}-legacy`;
-				const existingMessageId = this.panelMessages.get(messageKey);
-
-				if (existingMessageId && !hasChanged) {
-					// Message exists and config hasn't changed, check if message still exists
+					// Try to fetch the message
+					let message;
 					try {
-						await channel.messages.fetch(existingMessageId);
-						continue; // Message exists, no need to update
-					} catch (err) {
-						// Message was deleted, create new one
+						message = await channel.messages.fetch(messageId);
+					} catch (fetchErr) {
+						this.heart.core.console.log(this.heart.core.console.type.warning, `Message ${messageId} not found in ${channel.name}, removing from tracking`);
 						this.panelMessages.delete(messageKey);
+						continue;
 					}
-				}
 
-				if (hasChanged && existingMessageId) {
-					// Configuration changed, update existing message
-					await this.updateLegacyPanelMessage(channel, productConfig.config.panel, existingMessageId);
-				} else {
-					// Create new message
-					await this.createLegacyPanelMessage(channel, productConfig.config.panel);
+					// Update the message based on panel type
+					if (panelId === 'legacy') {
+						await this.updateLegacyPanelMessage(channel, productConfig.config.panel, messageId);
+					} else {
+						const panel = productConfig.config.panels[panelId];
+						if (panel) {
+							await this.updatePanelMessage(channel, panelId, panel, messageId);
+						} else {
+							this.heart.core.console.log(this.heart.core.console.type.warning, `Panel ${panelId} no longer exists in config, removing message tracking`);
+							this.panelMessages.delete(messageKey);
+							continue;
+						}
+					}
+
+					refreshCount++;
+				} catch (err) {
+					this.heart.core.console.log(this.heart.core.console.type.error, `Error refreshing message ${messageKey}:`, err);
+					errorCount++;
 				}
 			}
+
+			this.heart.core.console.log(
+				this.heart.core.console.type.log, 
+				`Panel refresh complete: ${refreshCount} updated, ${errorCount} errors`
+			);
+
+			return { refreshCount, errorCount, totalTracked: this.panelMessages.size };
+
 		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error auto-setting up legacy panel:', err);
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in refresh all panel messages:', err);
+			throw err;
 		}
 	}
 
@@ -304,8 +181,7 @@ module.exports = class productPanelHandler extends handler {
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, `Error updating panel message for ${panelId}:`, err);
-			// If update fails, create new message
-			await this.createPanelMessage(channel, panelId, panel);
+			throw err;
 		}
 	}
 
@@ -347,8 +223,7 @@ module.exports = class productPanelHandler extends handler {
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error updating legacy panel message:', err);
-			// If update fails, create new message
-			await this.createLegacyPanelMessage(channel, panel);
+			throw err;
 		}
 	}
 
