@@ -1,72 +1,145 @@
 {
-    // Product Panel Configuration
+    // Multi-Panel Product Configuration
     config: {
-        // Panel appearance settings
+        // Multiple panels configuration (NEW)
+        panels: {
+            "premium": {
+                name: "Premium Products",
+                title: "⭐ Premium Product Panel",
+                description: "🎯 Premium products for VIP members only! Choose a product below to download.",
+                embed_color: "#ffd700",
+                thumbnail_url: "https://example.com/premium-logo.png",
+                footer_text: "Premium Downloads • VIP Access Required",
+                emoji: "⭐",
+                products: [
+                    {
+                        id: "premium_tool",
+                        name: "Premium Tool v2.1",
+                        description: "Advanced automation tool with premium features",
+                        file_path: "premium_tool_v2.1.zip",
+                        download_name: "PremiumTool_v2.1.zip",
+                        emoji: "⚡",
+                        required_roles: [
+                            "123456789012345678", // Premium Member Role ID
+                            "987654321098765432"  // VIP Role ID
+                        ]
+                    },
+                    {
+                        id: "exclusive_content",
+                        name: "Exclusive Content",
+                        description: "Special exclusive content for top tier members",
+                        file_path: "exclusive_content.rar",
+                        download_name: "ExclusiveContent.rar",
+                        emoji: "💎",
+                        required_roles: [
+                            "999888777666555444"  // Elite Role ID
+                        ]
+                    }
+                ]
+            },
+            
+            "basic": {
+                name: "Basic Products",
+                title: "📦 Basic Product Panel",
+                description: "🔧 Essential tools and scripts for all members. Choose what you need!",
+                embed_color: "#00aaff",
+                thumbnail_url: "https://example.com/basic-logo.png",
+                footer_text: "Basic Downloads • Member Access Required",
+                emoji: "📦",
+                products: [
+                    {
+                        id: "basic_script",
+                        name: "Basic Script Pack",
+                        description: "Collection of useful basic scripts",
+                        file_path: "basic_scripts.zip",
+                        download_name: "BasicScripts.zip",
+                        emoji: "📜",
+                        required_roles: [
+                            "123456789012345678", // Member Role ID
+                            "111222333444555666"  // Verified Role ID
+                        ]
+                    },
+                    {
+                        id: "documentation", 
+                        name: "User Documentation",
+                        description: "Complete user guides and tutorials",
+                        file_path: "user_documentation.pdf",
+                        download_name: "UserGuide.pdf",
+                        emoji: "📚",
+                        required_roles: [
+                            "123456789012345678" // Any verified member
+                        ]
+                    }
+                ]
+            },
+            
+            "developer": {
+                name: "Developer Resources",
+                title: "💻 Developer Panel",
+                description: "🚀 Development tools and resources for our coding community!",
+                embed_color: "#ff6b35",
+                thumbnail_url: "https://example.com/dev-logo.png",
+                footer_text: "Developer Downloads • Developer Access Required",
+                emoji: "💻",
+                products: [
+                    {
+                        id: "source_code",
+                        name: "Source Code Access",
+                        description: "Full source code repository access",
+                        file_path: "source_code.zip",
+                        download_name: "SourceCode_Latest.zip",
+                        emoji: "💻",
+                        required_roles: [
+                            "777666555444333222"  // Developer Role ID
+                        ]
+                    },
+                    {
+                        id: "api_docs",
+                        name: "API Documentation",
+                        description: "Complete API documentation and examples",
+                        file_path: "api_documentation.pdf",
+                        download_name: "API_Documentation.pdf",
+                        emoji: "📋",
+                        required_roles: [
+                            "777666555444333222", // Developer Role ID
+                            "555444333222111000"  // Advanced User Role ID
+                        ]
+                    },
+                    {
+                        id: "dev_tools",
+                        name: "Development Tools",
+                        description: "Essential development utilities and helpers",
+                        file_path: "dev_tools.zip",
+                        download_name: "DevTools.zip",
+                        emoji: "🔧",
+                        required_roles: [
+                            "777666555444333222"  // Developer Role ID
+                        ]
+                    }
+                ]
+            }
+        },
+
+        // Legacy single panel configuration (for backwards compatibility)
+        // This will be used if no panels are defined above
         panel: {
             description: "🎯 Choose a product below to download. Make sure you have the required role!",
             embed_color: "#7289da",
-            thumbnail_url: "https://example.com/your-logo.png", // Optional
+            thumbnail_url: "https://example.com/your-logo.png",
             footer_text: "Product Downloads • Make sure you have the required permissions"
         },
 
-        // Products configuration
+        // Legacy products (for backwards compatibility)
         products: [
             {
-                id: "premium_tool",
-                name: "Premium Tool v2.1",
-                description: "Advanced automation tool with premium features",
-                file_path: "premium_tool_v2.1.zip", // File should be in plugin/data/products/
-                download_name: "PremiumTool_v2.1.zip", // Name when downloaded
-                emoji: "⚡",
+                id: "legacy_tool",
+                name: "Legacy Tool",
+                description: "Legacy single panel tool",
+                file_path: "legacy_tool.zip",
+                download_name: "LegacyTool.zip",
+                emoji: "🔧",
                 required_roles: [
-                    "123456789012345678", // Premium Member Role ID
-                    "987654321098765432"  // VIP Role ID
-                ]
-            },
-            {
-                id: "basic_script",
-                name: "Basic Script Pack",
-                description: "Collection of useful basic scripts",
-                file_path: "basic_scripts.zip",
-                download_name: "BasicScripts.zip",
-                emoji: "📜",
-                required_roles: [
-                    "123456789012345678", // Member Role ID
-                    "111222333444555666"  // Verified Role ID
-                ]
-            },
-            {
-                id: "exclusive_content",
-                name: "Exclusive Content",
-                description: "Special exclusive content for top tier members",
-                file_path: "exclusive_content.rar",
-                download_name: "ExclusiveContent.rar",
-                emoji: "💎",
-                required_roles: [
-                    "999888777666555444"  // Elite Role ID
-                ]
-            },
-            {
-                id: "documentation", 
-                name: "Full Documentation",
-                description: "Complete API documentation and guides",
-                file_path: "documentation.pdf",
-                download_name: "API_Documentation.pdf",
-                emoji: "📚",
-                required_roles: [
-                    "123456789012345678", // Any verified member
-                    "987654321098765432"
-                ]
-            },
-            {
-                id: "source_code",
-                name: "Source Code Access",
-                description: "Full source code repository access",
-                file_path: "source_code.zip",
-                download_name: "SourceCode_Latest.zip", 
-                emoji: "💻",
-                required_roles: [
-                    "777666555444333222"  // Developer Role ID
+                    "123456789012345678"
                 ]
             }
         ],
