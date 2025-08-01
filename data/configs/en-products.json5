@@ -33,9 +33,8 @@
 // # +----------------------------------------------------------------------------------------------+ #
 // ####################################################################################################
 {
-    // Multi-Panel Product Configuration
     config: {
-        // Multiple panels configuration (NEW)
+        // Multi-panel configuration
         panels: {
             "premium": {
                 name: "Premium Products",
@@ -45,7 +44,6 @@
                 thumbnail_url: "https://example.com/premium-logo.png",
                 footer_text: "Premium Downloads • VIP Access Required",
                 emoji: "⭐",
-                channel_id: "123456789012345678", // Channel ID for this panel (optional)
                 products: [
                     {
                         id: "premium_tool",
@@ -55,8 +53,8 @@
                         download_name: "PremiumTool_v2.1.zip",
                         emoji: "⚡",
                         required_roles: [
-                            "123456789012345678", // Premium Member Role ID
-                            "987654321098765432"  // VIP Role ID
+                            "123456789012345678",
+                            "987654321098765432"
                         ]
                     },
                     {
@@ -67,7 +65,7 @@
                         download_name: "ExclusiveContent.rar",
                         emoji: "💎",
                         required_roles: [
-                            "999888777666555444"  // Elite Role ID
+                            "999888777666555444"
                         ]
                     }
                 ]
@@ -81,7 +79,6 @@
                 thumbnail_url: "https://example.com/basic-logo.png",
                 footer_text: "Basic Downloads • Member Access Required",
                 emoji: "📦",
-                channel_id: "987654321098765432", // Channel ID for this panel (optional)
                 products: [
                     {
                         id: "basic_script",
@@ -91,8 +88,8 @@
                         download_name: "BasicScripts.zip",
                         emoji: "📜",
                         required_roles: [
-                            "123456789012345678", // Member Role ID
-                            "111222333444555666"  // Verified Role ID
+                            "123456789012345678",
+                            "111222333444555666"
                         ]
                     },
                     {
@@ -103,71 +100,22 @@
                         download_name: "UserGuide.pdf",
                         emoji: "📚",
                         required_roles: [
-                            "123456789012345678" // Any verified member
-                        ]
-                    }
-                ]
-            },
-            
-            "developer": {
-                name: "Developer Resources",
-                title: "💻 Developer Panel",
-                description: "🚀 Development tools and resources for our coding community!",
-                embed_color: "#ff6b35",
-                thumbnail_url: "https://example.com/dev-logo.png",
-                footer_text: "Developer Downloads • Developer Access Required",
-                emoji: "💻",
-                channel_id: "555444333222111000", // Channel ID for this panel (optional)
-                products: [
-                    {
-                        id: "source_code",
-                        name: "Source Code Access",
-                        description: "Full source code repository access",
-                        file_path: "source_code.zip",
-                        download_name: "SourceCode_Latest.zip",
-                        emoji: "💻",
-                        required_roles: [
-                            "777666555444333222"  // Developer Role ID
-                        ]
-                    },
-                    {
-                        id: "api_docs",
-                        name: "API Documentation",
-                        description: "Complete API documentation and examples",
-                        file_path: "api_documentation.pdf",
-                        download_name: "API_Documentation.pdf",
-                        emoji: "📋",
-                        required_roles: [
-                            "777666555444333222", // Developer Role ID
-                            "555444333222111000"  // Advanced User Role ID
-                        ]
-                    },
-                    {
-                        id: "dev_tools",
-                        name: "Development Tools",
-                        description: "Essential development utilities and helpers",
-                        file_path: "dev_tools.zip",
-                        download_name: "DevTools.zip",
-                        emoji: "🔧",
-                        required_roles: [
-                            "777666555444333222"  // Developer Role ID
+                            "123456789012345678"
                         ]
                     }
                 ]
             }
         },
 
-        // Legacy single panel configuration (for backwards compatibility)
-        // This will be used if no panels are defined above
+        // Legacy configuration (fallback)
         panel: {
             description: "🎯 Choose a product below to download. Make sure you have the required role!",
             embed_color: "#7289da",
             thumbnail_url: "https://example.com/your-logo.png",
-            footer_text: "Product Downloads • Make sure you have the required permissions",
-            channel_id: "123456789012345678" // Channel ID for legacy panel (optional)
+            footer_text: "Product Downloads • Make sure you have the required permissions"
         },
 
-        // Legacy products (for backwards compatibility)
+        // Legacy products (fallback)
         products: [
             {
                 id: "legacy_tool",
@@ -182,24 +130,17 @@
             }
         ],
 
-        // Permission configuration
+        // Permission settings
         permissions: {
-            panel_command: 'member', // Who can use /productpanel command
-            channel_setup: 'admin', // Who can setup panel channels
+            panel_command: 'member', // Who can use /productpanel show
+            channel_setup: 'admin'   // Who can use /productpanel setup
         },
 
-        // Channel configuration
-        channels: {
-            auto_setup: true, // Automatically setup panels in designated channels on bot start
-            update_interval: 3600000, // Update panels every hour (in milliseconds)
-            delete_old_messages: true, // Delete old panel messages when updating
-        },
-
-        // Logging settings
+        // Logging only (no channel automation)
         logging: {
-            track_downloads: true, // Save download history to database
-            log_to_channel: false, // Optional: log to a specific channel
-            log_channel_id: "123456789012345678" // Channel ID for logging (if enabled)
+            track_downloads: true,  // Record downloads in database
+            log_to_channel: false,   // Disabled channel logging
+            log_channel_id: ""      // Not used
         }
     }
 }

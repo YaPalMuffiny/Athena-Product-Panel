@@ -1,84 +1,174 @@
+// src/handler/productPanelHandler.js - Enhanced handler with auto-update functionality
 const handler = require('../../../../main/discord/core/handler/handler.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
-
-/* eslint-disable no-unused-vars, no-constant-condition */
-if (null) {
-	const heartType = require('../../../../types/heart.js');
-	const handlerType = require('../../../../types/discord/core/handler/handler.js');
-}
-/* eslint-enable no-unused-vars, no-constant-condition  */
+const crypto = require('crypto');
 
 /**
- * A class representing the product panel handler.
+ * Enhanced product panel handler with auto-update functionality.
  * @class
  * @extends handlerType
  */
 module.exports = class productPanelHandler extends handler {
-	/**
-     * Creates an instance of the handler.
-     * @param {heartType} heart - The heart of the bot.
-     */
 	constructor(heart) {
 		super(heart, 'productPanel');
 		heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
 		
-		// Store panel message IDs for tracking
+		// Store panel message IDs and their config hashes for tracking changes
 		this.panelMessages = new Map();
+		this.configHashes = new Map();
+		
+		this.initializeConfigHashes();
 	}
 
 	/**
-	 * Gets the product cache.
-	 * @returns {Object} The product cache interface.
+	 * Initialize config hashes for change detection.
 	 */
+	initializeConfigHashes() {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			
+			// Hash each panel configuration
+			if (productConfig.config.panels) {
+				Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
+					const panelHash = this.generateConfigHash(panel);
+					this.configHashes.set(panelId, panelHash);
+				});
+			}
+			
+			// Hash legacy configuration
+			if (productConfig.config.products) {
+				const legacyHash = this.generateConfigHash({
+					panel: productConfig.config.panel,
+					products: productConfig.config.products
+				});
+				this.configHashes.set('legacy', legacyHash);
+			}
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error initializing config hashes:', err);
+		}
+	}
+
+	/**
+	 * Generate a hash for configuration comparison.
+	 * @param {Object} config - The configuration object to hash.
+	 * @returns {string} The generated hash.
+	 */
+	generateConfigHash(config) {
+		return crypto.createHash('md5').update(JSON.stringify(config)).digest('hex');
+	}
+
+	/**
+	 * Check if panel configuration has changed.
+	 * @param {string} panelId - The panel ID to check.
+	 * @param {Object} currentConfig - The current panel configuration.
+	 * @returns {boolean} True if configuration has changed.
+	 */
+	hasConfigChanged(panelId, currentConfig) {
+		const currentHash = this.generateConfigHash(currentConfig);
+		const storedHash = this.configHashes.get(panelId);
+		
+		if (currentHash !== storedHash) {
+			this.configHashes.set(panelId, currentHash);
+			return true;
+		}
+		
+		return false;
+	}
+
 	getCache() {
 		return this.heart.core.discord.core.cache.manager.get('productCache');
 	}
 
 	/**
-	 * Gets a product by ID.
-	 * @param {string} productId - The product ID to search for.
-	 * @returns {Object|null} The product object or null if not found.
+	 * Sets up a specific panel in a given channel (used by setup command).
+	 * @param {string} panelId - The panel ID.
+	 * @param {Object} panel - The panel configuration.
+	 * @param {Object} targetChannel - The specific channel to setup in.
 	 */
-	getProductById(productId) {
-		const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-		return productConfig.config.products.find(p => p.id === productId) || null;
+	async setupPanelInChannel(panelId, panel, targetChannel) {
+		try {
+			// Check permissions
+			if (!targetChannel.permissionsFor(targetChannel.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
+				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
+			}
+
+			await this.createPanelMessage(targetChannel, panelId, panel);
+			
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Panel ${panelId} manually setup in channel ${targetChannel.name} (${targetChannel.id})`
+			);
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, `Error setting up panel ${panelId} in channel:`, err);
+			throw err;
+		}
 	}
 
 	/**
-	 * Checks if a user has access to a specific product.
-	 * @param {Object} member - The Discord member object.
-	 * @param {string} productId - The product ID to check access for.
-	 * @returns {boolean} True if the user has access, false otherwise.
+	 * Sets up the legacy panel in a given channel (used by setup command).
+	 * @param {Object} targetChannel - The specific channel to setup in.
 	 */
-	hasProductAccess(member, productId) {
-		const product = this.getProductById(productId);
-		if (!product) return false;
+	async setupLegacyPanelInChannel(targetChannel) {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const panel = productConfig.config.panel || {};
+			
+			// Check permissions
+			if (!targetChannel.permissionsFor(targetChannel.guild.members.me).has(['SendMessages', 'EmbedLinks'])) {
+				throw new Error(`Missing permissions in channel ${targetChannel.name}`);
+			}
 
-		return product.required_roles.some(roleId => member.roles.cache.has(roleId));
+			await this.createLegacyPanelMessage(targetChannel, panel);
+			
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Legacy panel manually setup in channel ${targetChannel.name} (${targetChannel.id})`
+			);
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error setting up legacy panel in channel:', err);
+			throw err;
+		}
 	}
 
 	/**
-	 * Gets all products that a user has access to.
-	 * @param {Object} member - The Discord member object.
-	 * @returns {Array} Array of products the user can access.
+	 * Auto-setup panels based on config (called on bot restart).
 	 */
-	getUserAccessibleProducts(member) {
-		const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-		return productConfig.config.products.filter(product => 
-			product.required_roles.some(roleId => member.roles.cache.has(roleId))
-		);
+	async autoSetupChannelPanels() {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+
+			// Setup panels for multi-panel configuration
+			if (productConfig.config.panels) {
+				for (const [panelId, panel] of Object.entries(productConfig.config.panels)) {
+					if (panel.channel_id) {
+						await this.autoSetupPanel(panelId, panel);
+					}
+				}
+			}
+
+			// Setup legacy panel if configured
+			if (productConfig.config.panel?.channel_id && productConfig.config.products?.length > 0) {
+				await this.autoSetupLegacyPanel();
+			}
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in auto-setup channel panels:', err);
+		}
 	}
 
 	/**
-	 * Sets up a specific panel in its designated channel.
+	 * Auto-setup a specific panel and check for updates.
 	 * @param {string} panelId - The panel ID.
 	 * @param {Object} panel - The panel configuration.
 	 */
-	async setupPanelInChannel(panelId, panel) {
+	async autoSetupPanel(panelId, panel) {
 		try {
-			if (!panel.channel_id) return;
+			// Check if configuration has changed
+			const hasChanged = this.hasConfigChanged(panelId, panel);
 
 			// Get all guilds the bot is in
 			for (const [guildId, guild] of this.heart.core.discord.client.guilds.cache) {
@@ -94,26 +184,50 @@ module.exports = class productPanelHandler extends handler {
 					continue;
 				}
 
-				await this.createPanelMessage(channel, panelId, panel);
+				const messageKey = `${channel.id}-${panelId}`;
+				const existingMessageId = this.panelMessages.get(messageKey);
+
+				if (existingMessageId && !hasChanged) {
+					// Message exists and config hasn't changed, check if message still exists
+					try {
+						await channel.messages.fetch(existingMessageId);
+						continue; // Message exists, no need to update
+					} catch (err) {
+						// Message was deleted, create new one
+						this.panelMessages.delete(messageKey);
+					}
+				}
+
+				if (hasChanged && existingMessageId) {
+					// Configuration changed, update existing message
+					await this.updatePanelMessage(channel, panelId, panel, existingMessageId);
+				} else {
+					// Create new message
+					await this.createPanelMessage(channel, panelId, panel);
+				}
 			}
 		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, `Error setting up panel ${panelId} in channel:`, err);
+			this.heart.core.console.log(this.heart.core.console.type.error, `Error auto-setting up panel ${panelId}:`, err);
 		}
 	}
 
 	/**
-	 * Sets up the legacy panel in its designated channel.
+	 * Auto-setup legacy panel and check for updates.
 	 */
-	async setupLegacyPanelInChannel() {
+	async autoSetupLegacyPanel() {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			const panel = productConfig.config.panel;
-			
-			if (!panel.channel_id) return;
+			const legacyConfig = {
+				panel: productConfig.config.panel,
+				products: productConfig.config.products
+			};
+
+			// Check if configuration has changed
+			const hasChanged = this.hasConfigChanged('legacy', legacyConfig);
 
 			// Get all guilds the bot is in
 			for (const [guildId, guild] of this.heart.core.discord.client.guilds.cache) {
-				const channel = guild.channels.cache.get(panel.channel_id);
+				const channel = guild.channels.cache.get(productConfig.config.panel.channel_id);
 				if (!channel) continue;
 
 				// Check permissions
@@ -125,10 +239,116 @@ module.exports = class productPanelHandler extends handler {
 					continue;
 				}
 
-				await this.createLegacyPanelMessage(channel, panel);
+				const messageKey = `${channel.id}-legacy`;
+				const existingMessageId = this.panelMessages.get(messageKey);
+
+				if (existingMessageId && !hasChanged) {
+					// Message exists and config hasn't changed, check if message still exists
+					try {
+						await channel.messages.fetch(existingMessageId);
+						continue; // Message exists, no need to update
+					} catch (err) {
+						// Message was deleted, create new one
+						this.panelMessages.delete(messageKey);
+					}
+				}
+
+				if (hasChanged && existingMessageId) {
+					// Configuration changed, update existing message
+					await this.updateLegacyPanelMessage(channel, productConfig.config.panel, existingMessageId);
+				} else {
+					// Create new message
+					await this.createLegacyPanelMessage(channel, productConfig.config.panel);
+				}
 			}
 		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error setting up legacy panel in channel:', err);
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error auto-setting up legacy panel:', err);
+		}
+	}
+
+	/**
+	 * Updates an existing panel message.
+	 * @param {Object} channel - The Discord channel object.
+	 * @param {string} panelId - The panel ID.
+	 * @param {Object} panel - The panel configuration.
+	 * @param {string} messageId - The existing message ID.
+	 */
+	async updatePanelMessage(channel, panelId, panel, messageId) {
+		try {
+			const message = await channel.messages.fetch(messageId);
+			
+			// Create updated embed
+			const embed = new EmbedBuilder()
+				.setTitle(panel.title || '🛍️ Product Download Panel')
+				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
+				.setColor(panel.embed_color || '#0099ff')
+				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private. • Updated` })
+				.setTimestamp();
+
+			if (panel.thumbnail_url) {
+				embed.setThumbnail(panel.thumbnail_url);
+			}
+
+			// Create updated buttons
+			const buttons = this.createChannelProductButtons(panel.products || [], panelId);
+
+			await message.edit({
+				embeds: [embed],
+				components: buttons
+			});
+
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Updated panel ${panelId} in channel ${channel.name} (${channel.id})`
+			);
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, `Error updating panel message for ${panelId}:`, err);
+			// If update fails, create new message
+			await this.createPanelMessage(channel, panelId, panel);
+		}
+	}
+
+	/**
+	 * Updates an existing legacy panel message.
+	 * @param {Object} channel - The Discord channel object.
+	 * @param {Object} panel - The panel configuration.
+	 * @param {string} messageId - The existing message ID.
+	 */
+	async updateLegacyPanelMessage(channel, panel, messageId) {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const message = await channel.messages.fetch(messageId);
+			
+			// Create updated embed
+			const embed = new EmbedBuilder()
+				.setTitle('🛍️ Product Download Panel')
+				.setDescription(panel.description || 'Click the buttons below to download products. Downloads will be sent privately to you.')
+				.setColor(panel.embed_color || '#0099ff')
+				.setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Anyone can use this panel, downloads are private. • Updated` })
+				.setTimestamp();
+
+			if (panel.thumbnail_url) {
+				embed.setThumbnail(panel.thumbnail_url);
+			}
+
+			// Create updated buttons
+			const buttons = this.createChannelProductButtons(productConfig.config.products || [], 'legacy');
+
+			await message.edit({
+				embeds: [embed],
+				components: buttons
+			});
+
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Updated legacy panel in channel ${channel.name} (${channel.id})`
+			);
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error updating legacy panel message:', err);
+			// If update fails, create new message
+			await this.createLegacyPanelMessage(channel, panel);
 		}
 	}
 
@@ -140,21 +360,6 @@ module.exports = class productPanelHandler extends handler {
 	 */
 	async createPanelMessage(channel, panelId, panel) {
 		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-
-			// Delete old panel message if configured
-			if (productConfig.config.channels?.delete_old_messages) {
-				const oldMessageId = this.panelMessages.get(`${channel.id}-${panelId}`);
-				if (oldMessageId) {
-					try {
-						const oldMessage = await channel.messages.fetch(oldMessageId);
-						await oldMessage.delete();
-					} catch (err) {
-						// Message might already be deleted, ignore error
-					}
-				}
-			}
-
 			// Create embed
 			const embed = new EmbedBuilder()
 				.setTitle(panel.title || '🛍️ Product Download Panel')
@@ -184,16 +389,12 @@ module.exports = class productPanelHandler extends handler {
 			});
 
 			collector.on('collect', async (buttonInteraction) => {
-				await this.handleChannelButtonInteraction(buttonInteraction, productConfig, panelId);
+				await this.handleChannelButtonInteraction(buttonInteraction, panelId);
 			});
-
-			this.heart.core.console.log(
-				this.heart.core.console.type.log,
-				`Panel ${panelId} setup in channel ${channel.name} (${channel.id})`
-			);
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, `Error creating panel message for ${panelId}:`, err);
+			throw err;
 		}
 	}
 
@@ -205,19 +406,6 @@ module.exports = class productPanelHandler extends handler {
 	async createLegacyPanelMessage(channel, panel) {
 		try {
 			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-
-			// Delete old panel message if configured
-			if (productConfig.config.channels?.delete_old_messages) {
-				const oldMessageId = this.panelMessages.get(`${channel.id}-legacy`);
-				if (oldMessageId) {
-					try {
-						const oldMessage = await channel.messages.fetch(oldMessageId);
-						await oldMessage.delete();
-					} catch (err) {
-						// Message might already be deleted, ignore error
-					}
-				}
-			}
 
 			// Create embed
 			const embed = new EmbedBuilder()
@@ -248,16 +436,12 @@ module.exports = class productPanelHandler extends handler {
 			});
 
 			collector.on('collect', async (buttonInteraction) => {
-				await this.handleChannelButtonInteraction(buttonInteraction, productConfig, 'legacy');
+				await this.handleChannelButtonInteraction(buttonInteraction, 'legacy');
 			});
-
-			this.heart.core.console.log(
-				this.heart.core.console.type.log,
-				`Legacy panel setup in channel ${channel.name} (${channel.id})`
-			);
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error creating legacy panel message:', err);
+			throw err;
 		}
 	}
 
@@ -296,11 +480,11 @@ module.exports = class productPanelHandler extends handler {
 	/**
 	 * Handles button interactions from channel panels.
 	 * @param {ButtonInteraction} buttonInteraction - The button interaction object.
-	 * @param {Object} productConfig - The product configuration.
 	 * @param {string} panelId - The panel ID where the button was clicked.
 	 */
-	async handleChannelButtonInteraction(buttonInteraction, productConfig, panelId) {
+	async handleChannelButtonInteraction(buttonInteraction, panelId) {
 		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
 			const customIdParts = buttonInteraction.customId.split(':');
 			const productInfo = customIdParts[customIdParts.length - 2]; // Get product_id part
 			const productId = productInfo.replace('channel_product_', '');
@@ -309,7 +493,7 @@ module.exports = class productPanelHandler extends handler {
 
 			// Find product in the correct panel or legacy products
 			if (panelId === 'legacy') {
-				product = productConfig.config.products.find(p => p.id === productId);
+				product = productConfig.config.products?.find(p => p.id === productId);
 			} else {
 				const panel = productConfig.config.panels[panelId];
 				product = panel?.products?.find(p => p.id === productId);
@@ -372,25 +556,29 @@ module.exports = class productPanelHandler extends handler {
 			);
 
 			// Optional: Save to database for tracking
-			if (productConfig.config.logging.track_downloads) {
-				const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
-				const downloads = userDoc.downloads || [];
-				downloads.push({
-					product_id: product.id,
-					product_name: product.name,
-					panel_id: panelId,
-					source: 'channel_panel',
-					timestamp: new Date(),
-					guild_id: buttonInteraction.guild.id
-				});
-				
-				await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
-					downloads: downloads 
-				});
+			if (productConfig.config.logging?.track_downloads) {
+				try {
+					const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
+					const downloads = userDoc.downloads || [];
+					downloads.push({
+						product_id: product.id,
+						product_name: product.name,
+						panel_id: panelId,
+						source: 'channel_panel',
+						timestamp: new Date(),
+						guild_id: buttonInteraction.guild.id
+					});
+					
+					await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
+						downloads: downloads 
+					});
+				} catch (dbErr) {
+					this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving download to database:', dbErr);
+				}
 			}
 
 			// Log to channel if enabled
-			if (productConfig.config.logging.log_to_channel && productConfig.config.logging.log_channel_id) {
+			if (productConfig.config.logging?.log_to_channel && productConfig.config.logging.log_channel_id) {
 				const logChannel = buttonInteraction.guild.channels.cache.get(productConfig.config.logging.log_channel_id);
 				if (logChannel) {
 					const logEmbed = new EmbedBuilder()
@@ -418,43 +606,6 @@ module.exports = class productPanelHandler extends handler {
 					ephemeral: true
 				});
 			}
-		}
-	}
-
-	/**
-	 * Logs a product download.
-	 * @param {Object} interaction - The Discord interaction object.
-	 * @param {Object} product - The product object.
-	 */
-	async logDownload(interaction, product) {
-		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-			
-			// Log to console
-			this.heart.core.console.log(
-				this.heart.core.console.type.log,
-				`Product Download - User: ${interaction.user.tag} | Product: ${product.name} | Guild: ${interaction.guild.name}`
-			);
-
-			// Log to channel if enabled
-			if (productConfig.config.logging.log_to_channel && productConfig.config.logging.log_channel_id) {
-				const logChannel = interaction.guild.channels.cache.get(productConfig.config.logging.log_channel_id);
-				if (logChannel) {
-					const logEmbed = new EmbedBuilder()
-						.setTitle('📥 Product Downloaded')
-						.addFields(
-							{ name: 'User', value: `${interaction.user.tag} (${interaction.user.id})`, inline: true },
-							{ name: 'Product', value: product.name, inline: true },
-							{ name: 'Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
-						)
-						.setColor('#00ff00')
-						.setTimestamp();
-
-					await logChannel.send({ embeds: [logEmbed] });
-				}
-			}
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error logging product download:', err);
 		}
 	}
 };
