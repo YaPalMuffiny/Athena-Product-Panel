@@ -1,0 +1,53 @@
+{
+    config: {
+        panels: {
+            panel1: {
+                name: 'VIP Products',
+                description: 'List of VIP products',
+                data: {
+                    products: [
+                        { id: 1, name: 'Product 1', price: 100 },
+                        { id: 2, name: 'Product 2', price: 200 },
+                    ]
+                }
+            },
+            panel2: {
+                name: 'MVP Products',
+                description: 'List of MVP products',
+                data: {
+                    products: [
+                        { id: 1, name: 'Product 1', price: 100 },
+                        { id: 2, name: 'Product 2', price: 200 },
+                    ]
+                }
+            },
+            panel3: {
+                name: 'Starter Products',
+                description: 'List of Starter products',
+                data: {
+                    products: [
+                        { id: 1, name: 'Product 1', price: 100 },
+                        { id: 2, name: 'Product 2', price: 200 },
+                    ]
+                }
+            }
+        },
+        lang: {
+            notpermitted: 'You are not permitted to access this feature',
+            noproducts: 'No products found',
+            productlist: 'Product List',
+            price: 'Price',
+            name: 'Name'
+        },
+        productlogs: {
+            enabled: true,
+            // This is used to store who downloads products (may help with tracking down piracy)
+            channel_id: 'CHANNEL_ID',
+            logged_panels: ['panel1', 'panel2', 'panel3']
+        },
+        permissions: {
+            product_command: 'admin',
+            ticket_inactivity_event: 'everyone',
+        }
+    }
+}
