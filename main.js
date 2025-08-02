@@ -1,4 +1,81 @@
-const plugin = require('../../main/discord/core/plugins/plugin.js');
+{
+									id: "basic_scripts",
+									name: "Basic Script Collection",
+									description: "Useful automation scripts for everyday tasks",
+									emoji: "📜",
+									file_path: "basic_scripts.zip",
+									download_name: "BasicScripts.zip",
+									required_roles: ["123456789012345678"],
+									enabled: true
+								}
+							]
+						}
+					},
+					
+					// Permission configuration
+					permissions: {
+						personal_panel: 'member',
+						channel_setup: 'admin',
+						role_hierarchy: {
+							"999888777666555444": "vip",
+							"987654321098765432": "premium",   
+							"123456789012345678": "member",
+							"111222333444555666": "trusted"
+						}
+					},
+					
+					// Logging and tracking settings
+					logging: {
+						track_downloads: true,
+						log_to_channel: false,
+						log_channel_id: "CHANNEL_ID",
+						log_personal_downloads: true,
+						log_channel_downloads: true,
+						include_user_roles: false,
+						include_file_size: false,
+						console_log_level: 'log'
+					},
+					
+					// Legacy support (for backwards compatibility)
+					legacy: {
+						enabled: false,
+						panel: {
+							title: "🛍️ Product Downloads",
+							description: "🔧 Click the buttons below to download products. Downloads are sent privately to you.",
+							embed_color: "#7289da",
+							thumbnail_url: "https://example.com/legacy-logo.png",
+							footer_text: "Product Downloads • Legacy Panel"
+						},
+						products: []
+					},
+					
+					// Advanced settings
+					advanced: {
+						interaction_timeout: 600000,
+						auto_cleanup_invalid: true,
+						max_file_size: 104857600, // 100MB
+						allowed_extensions: [".zip", ".rar", ".pdf", ".exe", ".msi"],
+						error_messages: {
+							no_permission: "❌ **Access Denied**\n\nYou don't have the required role to download this product.",
+							file_not_found: "❌ **File Not Available**\n\nThis product file could not be found. Please contact an administrator.",
+							panel_not_found: "❌ **Panel Not Found**\n\nThe requested panel doesn't exist or has been disabled.",
+							no_products: "📦 **No Products Available**\n\nThis panel has no products configured or all products are disabled."
+						}
+					}
+				}
+			},
+		);
+
+		const loadProductConfig = await this.heart.core.discord.core.config.manager.load(productConfig);
+		if (!loadProductConfig) {
+			this.heart.core.console.log(this.heart.core.console.type.warning, `Failed to load config for ${this.getName()}, using defaults...`);
+		} else {
+			this.heart.core.console.log(this.heart.core.console.type.startup, `Config loaded successfully for ${this.getName()}`);
+		}
+
+		// Always continue loading - don't disable plugin
+		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin pre-load completed successfully');
+	}const plugin = require('../../main/discord/core/plugins/plugin.js');
 const productPanelHandler = require('./src/handler/productPanelHandler.js');
 
 /* eslint-disable no-unused-vars, no-constant-condition */
@@ -22,7 +99,7 @@ module.exports = class productPanel extends plugin {
 		super(heart, { 
 			name: 'productPanel', 
 			author: 'Muffiny', 
-			version: '2.5.1', 
+			version: '2.5.2', 
 			priority: 0, 
 			dependencies: ['core'], 
 			softDependencies: [], 
@@ -34,6 +111,20 @@ module.exports = class productPanel extends plugin {
 	async preLoad() {
 		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin is pre-loading...');
 		
+		// Register database models first
+		try {
+			const productPanelModel = require('./src/models/productPanel.js');
+			const productDownloadModel = require('./src/models/productDownload.js');
+			
+			this.heart.core.database.registerModel(new productPanelModel());
+			this.heart.core.database.registerModel(new productDownloadModel());
+			
+			this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel database models registered successfully');
+		} catch (modelErr) {
+			this.heart.core.console.log(this.heart.core.console.type.warning, 'Failed to register database models:', modelErr);
+			// Don't disable plugin for model registration failures
+		}
+		
 		// Initialize product configuration following AthenaBot template pattern
 		const productConfig = new this.heart.core.discord.core.config.interface(
 			this.heart,
@@ -42,59 +133,114 @@ module.exports = class productPanel extends plugin {
 				config: {
 					// Global panel settings
 					global: {
-						default_embed_color: undefined,
-						default_thumbnail: undefined,
-						enable_emojis: undefined,
-						max_products_per_panel: undefined,
-						downloads_are_ephemeral: undefined
+						default_embed_color: '#0099ff',
+						default_thumbnail: 'https://example.com/default-logo.png',
+						enable_emojis: true,
+						max_products_per_panel: 25,
+						downloads_are_ephemeral: true
 					},
 					
 					// Product panels (new multi-panel system)
-					panels: undefined,
+					panels: {
+						// Premium products panel
+						"premium": {
+							enabled: true,
+							name: "Premium Products",
+							title: "⭐ Premium Downloads",
+							description: "🎯 Exclusive premium tools and content for VIP members. Click any button below for instant download.",
+							emoji: "⭐",
+							embed_color: "#ffd700",
+							thumbnail_url: "https://example.com/premium-logo.png",
+							footer_text: "Premium Access • VIP Members Only",
+							
+							products: [
+								{
+									id: "premium_tool_v2",
+									name: "Premium Tool v2.1",
+									description: "Advanced automation tool with premium features and priority support",
+									emoji: "⚡",
+									file_path: "premium_tool_v2.1.zip",
+									download_name: "PremiumTool_v2.1.zip",
+									required_roles: ["123456789012345678", "987654321098765432"],
+									enabled: true
+								}
+							]
+						},
+
+						// Basic products panel
+						"basic": {
+							enabled: true,
+							name: "Basic Tools",
+							title: "📦 Essential Downloads",
+							description: "🔧 Essential tools and resources for all members. Free downloads available to everyone with member access.",
+							emoji: "📦",
+							embed_color: "#00aaff",
+							thumbnail_url: "https://example.com/basic-logo.png",
+							footer_text: "Basic Downloads • Member Access",
+							
+							products: [
+								{
+									id: "basic_scripts",
+									name: "Basic Script Collection",
+									description: "Useful automation scripts for everyday tasks",
+									emoji: "📜",
+									file_path: "basic_scripts.zip",
+									download_name: "BasicScripts.zip",
+									required_roles: ["123456789012345678"],
+									enabled: true
+								}
+							]
+						}
+					},
 					
-					// Permission configuration (follows AthenaBot template pattern)
+					// Permission configuration
 					permissions: {
-						personal_panel: undefined,    // Who can use /products command
-						channel_setup: undefined,     // Who can use /setuppanel commands
-						role_hierarchy: undefined     // Role hierarchy for future features
+						personal_panel: 'member',
+						channel_setup: 'admin',
+						role_hierarchy: {
+							"999888777666555444": "vip",
+							"987654321098765432": "premium",   
+							"123456789012345678": "member",
+							"111222333444555666": "trusted"
+						}
 					},
 					
 					// Logging and tracking settings
 					logging: {
-						track_downloads: undefined,
-						log_to_channel: undefined,
-						log_channel_id: undefined,
-						log_personal_downloads: undefined,
-						log_channel_downloads: undefined,
-						include_user_roles: undefined,
-						include_file_size: undefined,
-						console_log_level: undefined
+						track_downloads: true,
+						log_to_channel: false,
+						log_channel_id: "CHANNEL_ID",
+						log_personal_downloads: true,
+						log_channel_downloads: true,
+						include_user_roles: false,
+						include_file_size: false,
+						console_log_level: 'log'
 					},
 					
 					// Legacy support (for backwards compatibility)
 					legacy: {
-						enabled: undefined,
+						enabled: false,
 						panel: {
-							title: undefined,
-							description: undefined,
-							embed_color: undefined,
-							thumbnail_url: undefined,
-							footer_text: undefined
+							title: "🛍️ Product Downloads",
+							description: "🔧 Click the buttons below to download products. Downloads are sent privately to you.",
+							embed_color: "#7289da",
+							thumbnail_url: "https://example.com/legacy-logo.png",
+							footer_text: "Product Downloads • Legacy Panel"
 						},
-						products: undefined
+						products: []
 					},
 					
 					// Advanced settings
 					advanced: {
-						interaction_timeout: undefined,
-						auto_cleanup_invalid: undefined,
-						max_file_size: undefined,
-						allowed_extensions: undefined,
+						interaction_timeout: 600000,
+						auto_cleanup_invalid: true,
+						max_file_size: 104857600, // 100MB
+						allowed_extensions: [".zip", ".rar", ".pdf", ".exe", ".msi"],
 						error_messages: {
-							no_permission: undefined,
-							file_not_found: undefined,
-							panel_not_found: undefined,
-							no_products: undefined
+							no_permission: "❌ **Access Denied**\n\nYou don't have the required role to download this product.",
+							file_not_found: "❌ **File Not Available**\n\nThis product file could not be found. Please contact an administrator.",
+							panel_not_found: "❌ **Panel Not Found**\n\nThe requested panel doesn't exist or has been disabled.",
+							no_products: "📦 **No Products Available**\n\nThis panel has no products configured or all products are disabled."
 						}
 					}
 				}
@@ -103,17 +249,15 @@ module.exports = class productPanel extends plugin {
 
 		const loadProductConfig = await this.heart.core.discord.core.config.manager.load(productConfig);
 		if (!loadProductConfig) {
-			this.setDisabled();
-			this.heart.core.console.log(this.heart.core.console.type.error, `Failed to load config, disabling plugin ${this.getName()}...`);
-			return;
+			this.heart.core.console.log(this.heart.core.console.type.error, `Failed to load config, but continuing plugin load for ${this.getName()}...`);
+			// Don't disable plugin - let it load with defaults
 		}
 
-		// Validate configuration
+		// Validate configuration but don't disable plugin if validation fails
 		const isValid = await this.validateConfiguration();
 		if (!isValid) {
-			this.setDisabled();
-			this.heart.core.console.log(this.heart.core.console.type.error, `Invalid configuration, disabling plugin ${this.getName()}...`);
-			return;
+			this.heart.core.console.log(this.heart.core.console.type.warning, `Configuration validation failed for plugin ${this.getName()}, but plugin will continue loading...`);
+			// Don't disable plugin - let commands handle missing config gracefully
 		}
 
 		this.heart.core.console.log(this.heart.core.console.type.startup, 'Product Panel plugin pre-load completed successfully');
@@ -169,20 +313,26 @@ module.exports = class productPanel extends plugin {
 	 */
 	async validateConfiguration() {
 		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const productConfig = this.heart.core.discord.core.config.manager.get('products');
+			if (!productConfig) {
+				this.heart.core.console.log(this.heart.core.console.type.warning, 'Product configuration not found during validation');
+				return false;
+			}
+			
+			const config = productConfig.get();
 			
 			// Check if at least one panel type is configured
-			const hasModernPanels = productConfig.config.panels && Object.keys(productConfig.config.panels).length > 0;
-			const hasLegacyProducts = productConfig.config.legacy?.enabled && productConfig.config.legacy.products?.length > 0;
+			const hasModernPanels = config.config.panels && Object.keys(config.config.panels).length > 0;
+			const hasLegacyProducts = config.config.legacy?.enabled && config.config.legacy.products?.length > 0;
 			
 			if (!hasModernPanels && !hasLegacyProducts) {
-				this.heart.core.console.log(this.heart.core.console.type.error, 'No panels or products configured');
+				this.heart.core.console.log(this.heart.core.console.type.warning, 'No panels or products configured - plugin will load but commands may have limited functionality');
 				return false;
 			}
 
 			// Validate panel configurations
 			if (hasModernPanels) {
-				for (const [panelId, panel] of Object.entries(productConfig.config.panels)) {
+				for (const [panelId, panel] of Object.entries(config.config.panels)) {
 					if (!panel.enabled) continue;
 					
 					if (!panel.products || panel.products.length === 0) {
@@ -193,8 +343,7 @@ module.exports = class productPanel extends plugin {
 					// Validate required fields
 					for (const product of panel.products.filter(p => p.enabled !== false)) {
 						if (!product.id || !product.name || !product.file_path) {
-							this.heart.core.console.log(this.heart.core.console.type.error, `Product in panel "${panelId}" missing required fields (id, name, file_path)`);
-							return false;
+							this.heart.core.console.log(this.heart.core.console.type.warning, `Product in panel "${panelId}" missing required fields (id, name, file_path)`);
 						}
 
 						if (!product.required_roles || product.required_roles.length === 0) {
@@ -218,12 +367,15 @@ module.exports = class productPanel extends plugin {
 	 */
 	getAllConfiguredProducts() {
 		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const productConfig = this.heart.core.discord.core.config.manager.get('products');
+			if (!productConfig) return [];
+			
+			const config = productConfig.get();
 			const allProducts = [];
 
 			// Modern panels
-			if (productConfig.config.panels) {
-				for (const panel of Object.values(productConfig.config.panels)) {
+			if (config.config.panels) {
+				for (const panel of Object.values(config.config.panels)) {
 					if (panel.enabled && panel.products) {
 						allProducts.push(...panel.products.filter(p => p.enabled !== false));
 					}
@@ -231,8 +383,8 @@ module.exports = class productPanel extends plugin {
 			}
 
 			// Legacy products
-			if (productConfig.config.legacy?.enabled && productConfig.config.legacy.products) {
-				allProducts.push(...productConfig.config.legacy.products.filter(p => p.enabled !== false));
+			if (config.config.legacy?.enabled && config.config.legacy.products) {
+				allProducts.push(...config.config.legacy.products.filter(p => p.enabled !== false));
 			}
 
 			return allProducts;
@@ -249,7 +401,20 @@ module.exports = class productPanel extends plugin {
 	 */
 	getConfigurationStats() {
 		try {
-			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const productConfig = this.heart.core.discord.core.config.manager.get('products');
+			if (!productConfig) {
+				return {
+					total_panels: 0,
+					enabled_panels: 0,
+					total_products: 0,
+					enabled_products: 0,
+					legacy_enabled: false,
+					logging_enabled: false,
+					error: 'Config not loaded'
+				};
+			}
+			
+			const config = productConfig.get();
 			
 			const stats = {
 				total_panels: 0,
@@ -257,14 +422,14 @@ module.exports = class productPanel extends plugin {
 				total_products: 0,
 				enabled_products: 0,
 				legacy_enabled: false,
-				logging_enabled: productConfig.config.logging?.track_downloads || false
+				logging_enabled: config.config.logging?.track_downloads || false
 			};
 
 			// Modern panels
-			if (productConfig.config.panels) {
-				stats.total_panels = Object.keys(productConfig.config.panels).length;
+			if (config.config.panels) {
+				stats.total_panels = Object.keys(config.config.panels).length;
 				
-				for (const panel of Object.values(productConfig.config.panels)) {
+				for (const panel of Object.values(config.config.panels)) {
 					if (panel.enabled) {
 						stats.enabled_panels++;
 					}
@@ -277,14 +442,14 @@ module.exports = class productPanel extends plugin {
 			}
 
 			// Legacy products
-			if (productConfig.config.legacy?.enabled) {
+			if (config.config.legacy?.enabled) {
 				stats.legacy_enabled = true;
 				stats.total_panels += 1;
 				stats.enabled_panels += 1;
 				
-				if (productConfig.config.legacy.products) {
-					stats.total_products += productConfig.config.legacy.products.length;
-					stats.enabled_products += productConfig.config.legacy.products.filter(p => p.enabled !== false).length;
+				if (config.config.legacy.products) {
+					stats.total_products += config.config.legacy.products.length;
+					stats.enabled_products += config.config.legacy.products.filter(p => p.enabled !== false).length;
 				}
 			}
 

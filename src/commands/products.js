@@ -4,17 +4,33 @@ const {
     ActionRowBuilder, 
     ButtonBuilder, 
     ButtonStyle, 
-    AttachmentBuilder, 
     StringSelectMenuBuilder, 
-    StringSelectMenuOptionBuilder
+    StringSelectMenuOptionBuilder,
+    PermissionFlagsBits,
+    MessageFlags
 } = require('discord.js');
 const command = require('../../../../main/discord/core/commands/command.js');
-const fs = require('fs');
-const path = require('path');
 
+/* eslint-disable no-unused-vars, no-constant-condition */
+if (null) {
+	const heartType = require('../../../../types/heart.js');
+	const commandType = require('../../../../types/discord/core/commands/commands.js');
+	const { CommandInteraction } = require('discord.js');
+}
+/* eslint-enable no-unused-vars, no-constant-condition */
+
+/**
+ * Personal product panel command following AthenaBot template pattern.
+ * @class
+ * @extends commandType
+ */
 module.exports = class personalPanel extends command {
+    /**
+     * Creates an instance of the command.
+     * @param {heartType} heart - The heart of the bot.
+     * @param {Object} cmdConfig - The command configuration.
+     */
     constructor(heart, cmdConfig) {
-        // Don't try to access config during construction - use default permission level
         super(heart, {
             name: 'products',
             data: new SlashCommandBuilder()
@@ -30,7 +46,7 @@ module.exports = class personalPanel extends command {
             global: true,
             category: 'products',
             bypass: false,
-            permissionLevel: 'member', // Default, will be checked during execution
+            permissionLevel: 'member',
         });
     }
 
@@ -72,10 +88,16 @@ module.exports = class personalPanel extends command {
             await interaction.respond(filtered.slice(0, 25));
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error in products autocomplete:', err);
+            new this.heart.core.error.interface(this.heart, err);
             await interaction.respond([]);
         }
     }
 
+    /**
+     * Executes the command.
+     * @param {CommandInteraction} interaction - The interaction object.
+     * @param {Object} langConfig - The language configuration.
+     */
     async execute(interaction, langConfig) {
         try {
             const productConfig = this.heart.core.discord.core.config.manager.get('products');
@@ -88,13 +110,10 @@ module.exports = class personalPanel extends command {
 
             const config = productConfig.get();
             
-            // Check permission level from config during execution
-            const requiredPermissionLevel = config?.config?.permissions?.personal_panel || 'member';
-            
-            // Basic permission check (you might want to implement a more sophisticated check based on your permission system)
-            if (requiredPermissionLevel === 'admin' && !interaction.member.permissions.has('Administrator')) {
+            // Basic permission check - anyone with member role can use
+            if (!interaction.member) {
                 return await interaction.reply({
-                    content: '❌ You need administrator permissions to use this command.',
+                    content: '❌ This command can only be used in a server.',
                     ephemeral: true
                 });
             }
@@ -124,11 +143,12 @@ module.exports = class personalPanel extends command {
             }
 
         } catch (err) {
-            this.heart.core.console.log(this.heart.core.console.type.error, 'Error in products command:', err);
+            this.heart.core.console.log(this.heart.core.console.type.error, `An issue occurred while executing command ${this.getName()}:`, err);
+            new this.heart.core.error.interface(this.heart, err);
             
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({
-                    content: '❌ An error occurred while loading your product panel.',
+                    content: '❌ An unexpected error occurred while processing your request.',
                     ephemeral: true
                 });
             }
@@ -154,28 +174,34 @@ module.exports = class personalPanel extends command {
             if (productConfig?.config?.panels) {
                 Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
                     if (panel.enabled !== false && panel.products?.length > 0) {
-                        selectMenu.addOptions(
-                            new StringSelectMenuOptionBuilder()
-                                .setLabel((panel.name || panelId).substring(0, 100))
-                                .setDescription((panel.description?.substring(0, 100) || 'Product panel') + (panel.description?.length > 100 ? '...' : ''))
-                                .setValue(panelId)
-                                .setEmoji(panel.emoji || '📦')
-                        );
-                        optionsAdded++;
+                        const enabledCount = panel.products.filter(p => p.enabled !== false).length;
+                        if (enabledCount > 0) {
+                            selectMenu.addOptions(
+                                new StringSelectMenuOptionBuilder()
+                                    .setLabel((panel.name || panelId).substring(0, 100))
+                                    .setDescription((panel.description?.substring(0, 100) || `${enabledCount} products available`) + (panel.description?.length > 100 ? '...' : ''))
+                                    .setValue(panelId)
+                                    .setEmoji(panel.emoji || '📦')
+                            );
+                            optionsAdded++;
+                        }
                     }
                 });
             }
 
             // Add legacy panel if exists
             if (productConfig?.config?.legacy?.enabled && productConfig.config.legacy.products?.length > 0) {
-                selectMenu.addOptions(
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel('Legacy Panel')
-                        .setDescription('Original product panel')
-                        .setValue('legacy')
-                        .setEmoji('🔧')
-                );
-                optionsAdded++;
+                const enabledCount = productConfig.config.legacy.products.filter(p => p.enabled !== false).length;
+                if (enabledCount > 0) {
+                    selectMenu.addOptions(
+                        new StringSelectMenuOptionBuilder()
+                            .setLabel('Legacy Panel')
+                            .setDescription(`${enabledCount} legacy products available`)
+                            .setValue('legacy')
+                            .setEmoji('🔧')
+                    );
+                    optionsAdded++;
+                }
             }
 
             // Check if we have any options
@@ -188,38 +214,15 @@ module.exports = class personalPanel extends command {
 
             const row = new ActionRowBuilder().addComponents(selectMenu);
 
-            const reply = await interaction.reply({
+            await interaction.reply({
                 embeds: [embed],
                 components: [row],
                 ephemeral: true
             });
 
-            const collector = reply.createMessageComponentCollector({ 
-                filter: (i) => i.user.id === interaction.user.id,
-                time: 300000 
-            });
-
-            collector.on('collect', async (selectInteraction) => {
-                try {
-                    if (selectInteraction.customId === `products:panel_select:${interaction.user.id}`) {
-                        const selectedPanelId = selectInteraction.values[0];
-                        await this.displayPanel(selectInteraction, productConfig, selectedPanelId);
-                    }
-                } catch (err) {
-                    this.heart.core.console.log(this.heart.core.console.type.error, 'Error in panel selection collector:', err);
-                }
-            });
-
-            collector.on('end', async () => {
-                try {
-                    await interaction.editReply({ components: [] });
-                } catch (err) {
-                    // Ignore edit errors after interaction expires
-                }
-            });
-
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error showing panel selection:', err);
+            new this.heart.core.error.interface(this.heart, err);
             if (!interaction.replied) {
                 await interaction.reply({
                     content: '❌ Error showing panel selection.',
@@ -314,38 +317,15 @@ module.exports = class personalPanel extends command {
                 ephemeral: true
             };
 
-            let reply;
             if (interaction.replied || interaction.deferred) {
-                reply = await interaction.editReply(replyOptions);
+                await interaction.editReply(replyOptions);
             } else {
-                reply = await interaction.reply(replyOptions);
+                await interaction.reply(replyOptions);
             }
-
-            const collector = reply.createMessageComponentCollector({ 
-                filter: (i) => i.user.id === interaction.user.id,
-                time: productConfig?.config?.advanced?.interaction_timeout || 600000 
-            });
-
-            collector.on('collect', async (buttonInteraction) => {
-                try {
-                    if (buttonInteraction.customId.startsWith(`products:download:`)) {
-                        await this.handleProductDownload(buttonInteraction, productConfig, panelId);
-                    }
-                } catch (err) {
-                    this.heart.core.console.log(this.heart.core.console.type.error, 'Error in button collector:', err);
-                }
-            });
-
-            collector.on('end', async () => {
-                try {
-                    await interaction.editReply({ components: [] });
-                } catch (err) {
-                    // Ignore edit errors after interaction expires
-                }
-            });
 
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error displaying panel:', err);
+            new this.heart.core.error.interface(this.heart, err);
             if (!interaction.replied && !interaction.deferred) {
                 await interaction.reply({
                     content: '❌ Error displaying panel.',
@@ -390,6 +370,7 @@ module.exports = class personalPanel extends command {
                     row.addComponents(button);
                 } catch (err) {
                     this.heart.core.console.log(this.heart.core.console.type.error, `Error creating button for product ${product.id}:`, err);
+                    new this.heart.core.error.interface(this.heart, err);
                 }
             }
 
@@ -399,163 +380,5 @@ module.exports = class personalPanel extends command {
         }
 
         return buttons;
-    }
-
-    async handleProductDownload(buttonInteraction, productConfig, panelId) {
-        try {
-            const customIdParts = buttonInteraction.customId.split(':');
-            const productId = customIdParts[2];
-            
-            let product;
-
-            // Find the product
-            if (panelId === 'legacy') {
-                product = productConfig?.config?.legacy?.products?.find(p => p.id === productId);
-            } else {
-                const panel = productConfig?.config?.panels?.[panelId];
-                product = panel?.products?.find(p => p.id === productId);
-            }
-
-            if (!product) {
-                return await buttonInteraction.reply({
-                    content: productConfig?.config?.advanced?.error_messages?.panel_not_found || '❌ Product not found.',
-                    ephemeral: true
-                });
-            }
-
-            // Check if product is enabled
-            if (product.enabled === false) {
-                return await buttonInteraction.reply({
-                    content: '❌ This product is currently disabled.',
-                    ephemeral: true
-                });
-            }
-
-            // Check user permissions
-            const member = buttonInteraction.member;
-            if (!member) {
-                return await buttonInteraction.reply({
-                    content: '❌ Could not verify your permissions.',
-                    ephemeral: true
-                });
-            }
-
-            const hasRequiredRole = product.required_roles?.some(roleId => 
-                member.roles.cache.has(roleId)
-            );
-
-            if (!hasRequiredRole) {
-                const roleNames = product.required_roles?.map(roleId => {
-                    const role = buttonInteraction.guild?.roles?.cache?.get(roleId);
-                    return role ? role.name : 'Unknown Role';
-                }).join(', ') || 'Required roles not configured';
-
-                return await buttonInteraction.reply({
-                    content: productConfig?.config?.advanced?.error_messages?.no_permission || 
-                        `❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
-                    ephemeral: true
-                });
-            }
-
-            // Check if file exists
-            const filePath = path.join(__dirname, '../../data/products/', product.file_path);
-            if (!fs.existsSync(filePath)) {
-                return await buttonInteraction.reply({
-                    content: productConfig?.config?.advanced?.error_messages?.file_not_found || 
-                        '❌ Product file not found. Please contact an administrator.',
-                    ephemeral: true
-                });
-            }
-
-            // Create and send file
-            const attachment = new AttachmentBuilder(filePath, { 
-                name: product.download_name || product.file_path 
-            });
-
-            const downloadEmbed = new EmbedBuilder()
-                .setTitle('✅ Download Ready')
-                .setDescription(`**${product.name}**\n\n${product.description || 'No description available.'}`)
-                .addFields(
-                    { name: 'File Name', value: product.download_name || product.file_path, inline: true },
-                    { name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : (productConfig?.config?.panels?.[panelId]?.name || panelId), inline: true }
-                )
-                .setColor('#00ff00')
-                .setFooter({ text: 'Download is private and only visible to you' })
-                .setTimestamp();
-
-            await buttonInteraction.reply({
-                embeds: [downloadEmbed],
-                files: [attachment],
-                ephemeral: true
-            });
-
-            // Log the download
-            this.heart.core.console.log(
-                this.heart.core.console.type.log, 
-                `Personal download: ${buttonInteraction.user.tag} (${buttonInteraction.user.id}) downloaded "${product.name}" from panel "${panelId}"`
-            );
-
-            // Track download in database and log to channel
-            await this.trackDownload(buttonInteraction, productConfig, product, panelId);
-
-        } catch (err) {
-            this.heart.core.console.log(this.heart.core.console.type.error, 'Error handling product download:', err);
-            
-            if (!buttonInteraction.replied) {
-                await buttonInteraction.reply({
-                    content: '❌ An error occurred while processing your download.',
-                    ephemeral: true
-                });
-            }
-        }
-    }
-
-    async trackDownload(buttonInteraction, productConfig, product, panelId) {
-        const loggingConfig = productConfig?.config?.logging || {};
-
-        // Track download in database if enabled
-        if (loggingConfig.track_downloads && loggingConfig.log_personal_downloads !== false) {
-            try {
-                const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
-                const downloads = userDoc.downloads || [];
-                downloads.push({
-                    product_id: product.id,
-                    product_name: product.name,
-                    panel_id: panelId,
-                    source: 'personal_panel',
-                    timestamp: new Date(),
-                    guild_id: buttonInteraction.guild.id
-                });
-                
-                await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
-                    downloads: downloads 
-                });
-            } catch (dbErr) {
-                this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving download to database:', dbErr);
-            }
-        }
-
-        // Log to channel if enabled
-        if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_personal_downloads !== false) {
-            try {
-                const logChannel = buttonInteraction.guild?.channels?.cache?.get(loggingConfig.log_channel_id);
-                if (logChannel) {
-                    const logEmbed = new EmbedBuilder()
-                        .setTitle('📥 Personal Download')
-                        .addFields(
-                            { name: 'User', value: `${buttonInteraction.user.tag} (${buttonInteraction.user.id})`, inline: true },
-                            { name: 'Product', value: product.name, inline: true },
-                            { name: 'Panel', value: panelId, inline: true },
-                            { name: 'Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
-                        )
-                        .setColor('#0099ff')
-                        .setTimestamp();
-
-                    await logChannel.send({ embeds: [logEmbed] });
-                }
-            } catch (logErr) {
-                this.heart.core.console.log(this.heart.core.console.type.error, 'Error logging to channel:', logErr);
-            }
-        }
     }
 };
