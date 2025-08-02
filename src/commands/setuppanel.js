@@ -2,19 +2,39 @@ const {
     SlashCommandBuilder, 
     EmbedBuilder, 
     ChannelType,
-    PermissionFlagsBits 
+    PermissionFlagsBits,
+    MessageFlags
 } = require('discord.js');
 const command = require('../../../../main/discord/core/commands/command.js');
 
+/* eslint-disable no-unused-vars, no-constant-condition */
+if (null) {
+	const heartType = require('../../../../types/heart.js');
+	const commandType = require('../../../../types/discord/core/commands/commands.js');
+	const { CommandInteraction } = require('discord.js');
+}
+/* eslint-enable no-unused-vars, no-constant-condition */
+
+/**
+ * Setup panel command following AthenaBot template pattern.
+ * @class
+ * @extends commandType
+ */
 module.exports = class setupPanel extends command {
+    /**
+     * Creates an instance of the command.
+     * @param {heartType} heart - The heart of the bot.
+     * @param {Object} cmdConfig - The command configuration.
+     */
     constructor(heart, cmdConfig) {
+        // Get product config following AthenaBot template pattern
         const productConfig = heart.core.discord.core.config.manager.get('products').get();
 
         super(heart, {
             name: 'setuppanel',
             data: new SlashCommandBuilder()
-                .setName('setuppanel')
-                .setDescription('Setup product panels in channels (Admin only)')
+                .setName(cmdConfig.commands?.setuppanel?.name || 'setuppanel')
+                .setDescription(cmdConfig.commands?.setuppanel?.description || 'Setup product panels in channels (Admin only)')
                 .addSubcommand(subcommand =>
                     subcommand
                         .setName('create')
@@ -51,30 +71,38 @@ module.exports = class setupPanel extends command {
             contextMenu: false,
             global: true,
             category: 'admin',
-            bypass: true,
-            permissionLevel: productConfig.config.permissions.channel_setup || 'admin',
+            bypass: true, // Make sure this is set to true following template pattern
+            permissionLevel: productConfig.config.permissions.channel_setup,
         });
     }
 
     async autocomplete(interaction) {
         try {
-            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+            const productConfig = this.heart.core.discord.core.config.manager.get('products');
+            if (!productConfig) {
+                return await interaction.respond([]);
+            }
+            
+            const config = productConfig.get();
             const focusedValue = interaction.options.getFocused();
             
             const choices = [];
             
             // Add multi-panels
-            if (productConfig.config.panels) {
-                Object.keys(productConfig.config.panels).forEach(panelId => {
-                    choices.push({
-                        name: productConfig.config.panels[panelId].name || panelId,
-                        value: panelId
-                    });
+            if (config?.config?.panels) {
+                Object.keys(config.config.panels).forEach(panelId => {
+                    const panel = config.config.panels[panelId];
+                    if (panel.enabled !== false) {
+                        choices.push({
+                            name: panel.name || panelId,
+                            value: panelId
+                        });
+                    }
                 });
             }
             
             // Add legacy panel if products exist
-            if (productConfig.config.products && productConfig.config.products.length > 0) {
+            if (config?.config?.legacy?.enabled && config.config.legacy.products && config.config.legacy.products.length > 0) {
                 choices.push({
                     name: 'Legacy Panel',
                     value: 'legacy'
@@ -88,12 +116,19 @@ module.exports = class setupPanel extends command {
             await interaction.respond(filtered.slice(0, 25));
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error in setuppanel autocomplete:', err);
+            new this.heart.core.error.interface(this.heart, err);
+            await interaction.respond([]);
         }
     }
 
+    /**
+     * Executes the command.
+     * @param {CommandInteraction} interaction - The interaction object.
+     * @param {Object} langConfig - The language configuration.
+     */
     async execute(interaction, langConfig) {
         try {
-            // Check admin permissions
+            // Check admin permissions (basic check following template pattern)
             if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
                 return await interaction.reply({
                     content: '❌ You need administrator permissions to use this command.',
@@ -116,51 +151,61 @@ module.exports = class setupPanel extends command {
             }
 
         } catch (err) {
-            this.heart.core.console.log(this.heart.core.console.type.error, 'Error in setuppanel command:', err);
-            await interaction.reply({
-                content: '❌ An error occurred while processing the setup command.',
-                ephemeral: true
-            });
+            this.heart.core.console.log(this.heart.core.console.type.error, `An issue occurred while executing command ${this.getName()}:`, err);
+            new this.heart.core.error.interface(this.heart, err);
+            
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    embeds: [this.heart.core.util.discord.generateErrorEmbed(langConfig.lang?.unexpected_command_error?.replace(/%command%/g, `/${interaction.commandName}`) || 'An unexpected error occurred')],
+                    flags: MessageFlags.Ephemeral
+                });
+            }
         }
     }
 
     async handleCreate(interaction) {
-        const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-        const targetChannel = interaction.options.getChannel('channel');
-        const selectedPanel = interaction.options.getString('panel');
+        try {
+            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+            const targetChannel = interaction.options.getChannel('channel');
+            const selectedPanel = interaction.options.getString('panel');
 
-        // Check bot permissions in target channel
-        const botPerms = targetChannel.permissionsFor(interaction.guild.members.me);
-        if (!botPerms.has(['SendMessages', 'EmbedLinks'])) {
-            return await interaction.reply({
-                content: `❌ I don't have the required permissions in ${targetChannel}.\n\n**Required Permissions:**\n• Send Messages\n• Embed Links`,
-                ephemeral: true
-            });
+            // Check bot permissions in target channel
+            const botPerms = targetChannel.permissionsFor(interaction.guild.members.me);
+            if (!botPerms.has(['SendMessages', 'EmbedLinks'])) {
+                return await interaction.reply({
+                    content: `❌ I don't have the required permissions in ${targetChannel}.\n\n**Required Permissions:**\n• Send Messages\n• Embed Links`,
+                    ephemeral: true
+                });
+            }
+
+            // Check if any panels are configured
+            const hasMultiPanels = productConfig.config.panels && Object.keys(productConfig.config.panels).length > 0;
+            const hasLegacyProducts = productConfig.config.legacy?.enabled && productConfig.config.legacy.products && productConfig.config.legacy.products.length > 0;
+
+            if (!hasMultiPanels && !hasLegacyProducts) {
+                return await interaction.reply({
+                    content: '❌ No product panels are configured. Please configure panels in your products config first.',
+                    ephemeral: true
+                });
+            }
+
+            // If no panel specified and multiple options available, show available panels
+            if (!selectedPanel && hasMultiPanels) {
+                return await this.showAvailablePanels(interaction, productConfig, targetChannel);
+            }
+
+            // Determine which panel to create
+            let panelToCreate = selectedPanel;
+            if (!panelToCreate) {
+                panelToCreate = hasLegacyProducts ? 'legacy' : Object.keys(productConfig.config.panels)[0];
+            }
+
+            await this.createPanel(interaction, productConfig, targetChannel, panelToCreate);
+        } catch (err) {
+            this.heart.core.console.log(this.heart.core.console.type.error, 'Error in handleCreate:', err);
+            new this.heart.core.error.interface(this.heart, err);
+            throw err;
         }
-
-        // Check if any panels are configured
-        const hasMultiPanels = productConfig.config.panels && Object.keys(productConfig.config.panels).length > 0;
-        const hasLegacyProducts = productConfig.config.products && productConfig.config.products.length > 0;
-
-        if (!hasMultiPanels && !hasLegacyProducts) {
-            return await interaction.reply({
-                content: '❌ No product panels are configured. Please configure panels in your products config first.',
-                ephemeral: true
-            });
-        }
-
-        // If no panel specified and multiple options available, show available panels
-        if (!selectedPanel && hasMultiPanels) {
-            return await this.showAvailablePanels(interaction, productConfig, targetChannel);
-        }
-
-        // Determine which panel to create
-        let panelToCreate = selectedPanel;
-        if (!panelToCreate) {
-            panelToCreate = hasLegacyProducts ? 'legacy' : Object.keys(productConfig.config.panels)[0];
-        }
-
-        await this.createPanel(interaction, productConfig, targetChannel, panelToCreate);
     }
 
     async showAvailablePanels(interaction, productConfig, targetChannel) {
@@ -175,12 +220,14 @@ module.exports = class setupPanel extends command {
         if (productConfig.config.panels) {
             Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
                 const productCount = panel.products?.length || 0;
-                panelList += `• **${panel.name || panelId}** (\`${panelId}\`) - ${productCount} products\n`;
+                const enabledCount = panel.products?.filter(p => p.enabled !== false).length || 0;
+                panelList += `• **${panel.name || panelId}** (\`${panelId}\`) - ${enabledCount}/${productCount} products enabled\n`;
             });
         }
         
-        if (productConfig.config.products && productConfig.config.products.length > 0) {
-            panelList += `• **Legacy Panel** (\`legacy\`) - ${productConfig.config.products.length} products\n`;
+        if (productConfig.config.legacy?.enabled && productConfig.config.legacy.products && productConfig.config.legacy.products.length > 0) {
+            const enabledCount = productConfig.config.legacy.products.filter(p => p.enabled !== false).length;
+            panelList += `• **Legacy Panel** (\`legacy\`) - ${enabledCount}/${productConfig.config.legacy.products.length} products enabled\n`;
         }
 
         embed.addFields({ name: 'Available Panels', value: panelList || 'No panels configured' });
@@ -199,9 +246,9 @@ module.exports = class setupPanel extends command {
             const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
             
             if (panelId === 'legacy') {
-                if (!productConfig.config.products || productConfig.config.products.length === 0) {
+                if (!productConfig.config.legacy?.enabled || !productConfig.config.legacy.products || productConfig.config.legacy.products.length === 0) {
                     return await interaction.editReply({
-                        content: '❌ No legacy products are configured.'
+                        content: '❌ No legacy products are configured or legacy panel is disabled.'
                     });
                 }
                 await handler.setupLegacyPanelInChannel(targetChannel);
@@ -210,6 +257,11 @@ module.exports = class setupPanel extends command {
                 if (!panel) {
                     return await interaction.editReply({
                         content: '❌ Panel not found.'
+                    });
+                }
+                if (panel.enabled === false) {
+                    return await interaction.editReply({
+                        content: '❌ Panel is disabled.'
                     });
                 }
                 await handler.setupPanelInChannel(panelId, panel, targetChannel);
@@ -221,7 +273,9 @@ module.exports = class setupPanel extends command {
                 .addFields(
                     { name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : (productConfig.config.panels[panelId]?.name || panelId), inline: true },
                     { name: 'Channel', value: targetChannel.toString(), inline: true },
-                    { name: 'Products', value: panelId === 'legacy' ? `${productConfig.config.products.length}` : `${productConfig.config.panels[panelId]?.products?.length || 0}`, inline: true }
+                    { name: 'Products', value: panelId === 'legacy' 
+                        ? `${productConfig.config.legacy.products.filter(p => p.enabled !== false).length}` 
+                        : `${productConfig.config.panels[panelId]?.products?.filter(p => p.enabled !== false).length || 0}`, inline: true }
                 )
                 .setColor('#00ff00')
                 .setFooter({ text: 'Panel is now active and ready for use' })
@@ -238,10 +292,11 @@ module.exports = class setupPanel extends command {
 
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error creating panel:', err);
+            new this.heart.core.error.interface(this.heart, err);
             
             const errorEmbed = new EmbedBuilder()
                 .setTitle('❌ Panel Creation Failed')
-                .setDescription(`Failed to create panel in ${targetChannel}.\n\nCheck the bot's permissions and configuration.`)
+                .setDescription(`Failed to create panel in ${targetChannel}.\n\n**Error:** ${err.message}\n\nCheck the bot's permissions and configuration.`)
                 .setColor('#ff0000')
                 .setTimestamp();
 
@@ -252,93 +307,104 @@ module.exports = class setupPanel extends command {
     }
 
     async handleList(interaction) {
-        const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-        const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
+        try {
+            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+            const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
 
-        const embed = new EmbedBuilder()
-            .setTitle('📊 Panel Configuration Status')
-            .setColor('#0099ff')
-            .setTimestamp();
+            const embed = new EmbedBuilder()
+                .setTitle('📊 Panel Configuration Status')
+                .setColor('#0099ff')
+                .setTimestamp();
 
-        let configInfo = '';
-        let statusInfo = '';
+            let configInfo = '';
+            let statusInfo = '';
 
-        // Multi-panels
-        if (productConfig.config.panels && Object.keys(productConfig.config.panels).length > 0) {
-            configInfo += '**Multi-Panels:**\n';
-            Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
-                const productCount = panel.products?.length || 0;
-                configInfo += `• ${panel.name || panelId} (${productCount} products)\n`;
-            });
-            configInfo += '\n';
-        }
-
-        // Legacy panel
-        if (productConfig.config.products && productConfig.config.products.length > 0) {
-            configInfo += `**Legacy Panel:**\n• ${productConfig.config.products.length} products configured\n\n`;
-        }
-
-        if (!configInfo) {
-            configInfo = 'No panels configured\n';
-        }
-
-        // Active panels status
-        const activePanels = handler.panelMessages.size;
-        statusInfo += `**Active Panels:** ${activePanels} messages\n`;
-        
-        if (activePanels > 0) {
-            statusInfo += '**Channels with panels:**\n';
-            const channelIds = new Set();
-            for (const [messageKey] of handler.panelMessages) {
-                const channelId = messageKey.split('-')[0];
-                channelIds.add(channelId);
+            // Multi-panels
+            if (productConfig.config.panels && Object.keys(productConfig.config.panels).length > 0) {
+                configInfo += '**Multi-Panels:**\n';
+                Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
+                    const productCount = panel.products?.length || 0;
+                    const enabledCount = panel.products?.filter(p => p.enabled !== false).length || 0;
+                    const status = panel.enabled === false ? ' (DISABLED)' : '';
+                    configInfo += `• ${panel.name || panelId} (${enabledCount}/${productCount} products)${status}\n`;
+                });
+                configInfo += '\n';
             }
+
+            // Legacy panel
+            if (productConfig.config.legacy?.enabled && productConfig.config.legacy.products && productConfig.config.legacy.products.length > 0) {
+                const enabledCount = productConfig.config.legacy.products.filter(p => p.enabled !== false).length;
+                configInfo += `**Legacy Panel:**\n• ${enabledCount}/${productConfig.config.legacy.products.length} products configured\n\n`;
+            }
+
+            if (!configInfo) {
+                configInfo = 'No panels configured\n';
+            }
+
+            // Active panels status
+            const activePanels = handler.panelMessages.size;
+            const databaseLoaded = handler.databaseLoaded;
+            statusInfo += `**Active Panels:** ${activePanels} messages\n`;
+            statusInfo += `**Database Status:** ${databaseLoaded ? 'Loaded' : 'Not loaded'}\n`;
             
-            for (const channelId of channelIds) {
-                const channel = interaction.guild.channels.cache.get(channelId);
-                if (channel) {
-                    statusInfo += `• ${channel.name}\n`;
+            if (activePanels > 0) {
+                statusInfo += '**Channels with panels:**\n';
+                const channelIds = new Set();
+                for (const [messageKey] of handler.panelMessages) {
+                    const channelId = messageKey.split('-')[0];
+                    channelIds.add(channelId);
+                }
+                
+                for (const channelId of channelIds) {
+                    const channel = interaction.guild.channels.cache.get(channelId);
+                    if (channel) {
+                        statusInfo += `• ${channel.name}\n`;
+                    }
                 }
             }
+
+            embed.addFields(
+                { name: 'Configuration', value: configInfo },
+                { name: 'Status', value: statusInfo }
+            );
+
+            await interaction.reply({
+                embeds: [embed],
+                ephemeral: true
+            });
+        } catch (err) {
+            this.heart.core.console.log(this.heart.core.console.type.error, 'Error in handleList:', err);
+            new this.heart.core.error.interface(this.heart, err);
+            throw err;
         }
-
-        embed.addFields(
-            { name: 'Configuration', value: configInfo },
-            { name: 'Status', value: statusInfo }
-        );
-
-        await interaction.reply({
-            embeds: [embed],
-            ephemeral: true
-        });
     }
 
     async handleClear(interaction) {
-        const confirm = interaction.options.getBoolean('confirm');
-        
-        if (!confirm) {
-            return await interaction.reply({
-                content: '❌ You must confirm to clear all panels. Set `confirm` to `True`.',
-                ephemeral: true
-            });
-        }
-
-        await interaction.deferReply({ ephemeral: true });
-
         try {
+            const confirm = interaction.options.getBoolean('confirm');
+            
+            if (!confirm) {
+                return await interaction.reply({
+                    content: '❌ You must confirm to clear all panels. Set `confirm` to `True`.',
+                    ephemeral: true
+                });
+            }
+
+            await interaction.deferReply({ ephemeral: true });
+
             const handler = this.heart.core.discord.core.handler.manager.get('productPanel');
             const result = await handler.clearAllPanelMessages();
 
             const embed = new EmbedBuilder()
                 .setTitle('🗑️ Panels Cleared')
-                .setDescription('All product panel messages have been removed from channels.')
+                .setDescription('All product panel messages have been removed from channels and database.')
                 .addFields(
                     { name: 'Messages Removed', value: `${result.removedCount}`, inline: true },
                     { name: 'Errors', value: `${result.errorCount}`, inline: true },
                     { name: 'Channels Affected', value: `${result.channelsAffected}`, inline: true }
                 )
                 .setColor(result.errorCount > 0 ? '#ff9900' : '#00ff00')
-                .setFooter({ text: 'All panel tracking has been cleared' })
+                .setFooter({ text: 'All panel tracking has been cleared from memory and database' })
                 .setTimestamp();
 
             await interaction.editReply({
@@ -352,10 +418,11 @@ module.exports = class setupPanel extends command {
 
         } catch (err) {
             this.heart.core.console.log(this.heart.core.console.type.error, 'Error clearing panels:', err);
+            new this.heart.core.error.interface(this.heart, err);
             
             const errorEmbed = new EmbedBuilder()
                 .setTitle('❌ Clear Failed')
-                .setDescription('An error occurred while clearing panels.')
+                .setDescription(`An error occurred while clearing panels.\n\n**Error:** ${err.message}`)
                 .setColor('#ff0000')
                 .setTimestamp();
 

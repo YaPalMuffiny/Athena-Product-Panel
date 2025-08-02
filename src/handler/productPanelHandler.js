@@ -1,24 +1,30 @@
-// src/handler/productPanelHandler.js - Fixed handler with proper error handling
 const handler = require('../../../../main/discord/core/handler/handler.js');
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
+/* eslint-disable no-unused-vars, no-constant-condition */
+if (null) {
+	const heartType = require('../../../../types/heart.js');
+	const handlerType = require('../../../../types/discord/core/handler/handler.js');
+}
+/* eslint-enable no-unused-vars, no-constant-condition */
+
 /**
- * Product panel handler with optimized setup and channel functionality.
+ * Product panel handler with database support following AthenaBot template pattern.
  * @class
  * @extends handlerType
  */
 module.exports = class productPanelHandler extends handler {
+	/**
+	 * Creates an instance of the handler.
+	 * @param {heartType} heart - The heart of the bot.
+	 */
 	constructor(heart) {
 		super(heart, 'productPanel');
 		
-		// Initialize cache
-		try {
-			heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error registering product cache:', err);
-		}
+		// Initialize cache following AthenaBot template pattern
+		heart.core.discord.core.cache.manager.register(new heart.core.discord.core.cache.interface(heart, 'productCache'));
 		
 		// Store panel message IDs for tracking
 		this.panelMessages = new Map(); // key: "channelId-panelId", value: messageId
@@ -27,92 +33,286 @@ module.exports = class productPanelHandler extends handler {
 		this.databaseLoaded = false;
 	}
 
+	/**
+	 * Get cache instance following AthenaBot template pattern
+	 * @returns {Object} Cache interface
+	 */
 	getCache() {
-		try {
-			return this.heart.core.discord.core.cache.manager.get('productCache');
-		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error getting product cache:', err);
-			return null;
-		}
+		return this.heart.core.discord.core.cache.manager.get('productCache');
 	}
 
 	/**
-	 * Load panel message tracking from database
+	 * Load panel message tracking from MongoDB database using AthenaBot models
 	 */
 	async loadPanelMessagesFromDatabase() {
 		if (this.databaseLoaded) return; // Already loaded
 		
 		try {
-			const cache = this.getCache();
-			if (!cache) {
-				this.heart.core.console.log(this.heart.core.console.type.warning, 'Product cache not available, skipping database load');
+			const client = this.heart.core.discord?.client;
+			if (!client) {
+				this.heart.core.console.log(this.heart.core.console.type.warning, 'Discord client not ready, deferring panel message loading');
 				return;
 			}
 
-			const panelData = await cache.get('panel_messages');
-			if (panelData) {
-				this.panelMessages = new Map(Object.entries(panelData));
-				this.heart.core.console.log(
-					this.heart.core.console.type.log,
-					`Loaded ${this.panelMessages.size} panel messages from database`
-				);
+			// Get ProductPanel model following AthenaBot template pattern
+			const ProductPanelModel = this.heart.core.database.getModel('productPanel').getModel();
+			
+			// Get all panel messages for all guilds this bot is in
+			const guildIds = client.guilds.cache.map(guild => guild.id);
+			
+			const panelMessages = await ProductPanelModel.find({
+				guildId: { $in: guildIds },
+				isActive: true
+			}).exec();
+
+			let loadedCount = 0;
+			let removedCount = 0;
+
+			for (const panelMessage of panelMessages) {
+				try {
+					// Verify the message still exists
+					const guild = client.guilds.cache.get(panelMessage.guildId);
+					if (!guild) {
+						await ProductPanelModel.findByIdAndUpdate(panelMessage._id, { isActive: false });
+						removedCount++;
+						continue;
+					}
+
+					const channel = guild.channels.cache.get(panelMessage.channelId);
+					if (!channel) {
+						await ProductPanelModel.findByIdAndUpdate(panelMessage._id, { isActive: false });
+						removedCount++;
+						continue;
+					}
+
+					// Try to fetch the message to verify it exists
+					try {
+						await channel.messages.fetch(panelMessage.messageId);
+						
+						// Message exists, add to tracking
+						const key = `${panelMessage.channelId}-${panelMessage.panelId}`;
+						this.panelMessages.set(key, panelMessage.messageId);
+						loadedCount++;
+
+						// Set up collector for this existing message
+						await this.setupExistingMessageCollector(channel, panelMessage.messageId, panelMessage.panelId);
+
+					} catch (fetchErr) {
+						// Message doesn't exist anymore, mark as inactive
+						await ProductPanelModel.findByIdAndUpdate(panelMessage._id, { isActive: false });
+						removedCount++;
+					}
+
+				} catch (err) {
+					this.heart.core.console.log(this.heart.core.console.type.error, `Error processing panel message ${panelMessage._id}:`, err);
+					new this.heart.core.error.interface(this.heart, err);
+				}
 			}
+
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Loaded ${loadedCount} panel messages from database, removed ${removedCount} stale entries`
+			);
+
 			this.databaseLoaded = true;
+
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error loading panel messages from database:', err);
+			new this.heart.core.error.interface(this.heart, err);
 		}
 	}
 
 	/**
-	 * Save panel message tracking to database
+	 * Set up message collector for an existing panel message
 	 */
-	async savePanelMessagesToDatabase() {
+	async setupExistingMessageCollector(channel, messageId, panelId) {
 		try {
-			const cache = this.getCache();
-			if (!cache) {
-				this.heart.core.console.log(this.heart.core.console.type.warning, 'Product cache not available, skipping database save');
-				return;
-			}
+			const message = await channel.messages.fetch(messageId);
+			
+			const collector = message.createMessageComponentCollector({
+				filter: (interaction) => interaction.customId.startsWith(`setup:product:`),
+			});
 
-			const panelData = Object.fromEntries(this.panelMessages);
-			await cache.set('panel_messages', panelData);
+			collector.on('collect', async (buttonInteraction) => {
+				await this.handleChannelButtonInteraction(buttonInteraction, panelId);
+			});
+
+			collector.on('error', (err) => {
+				this.heart.core.console.log(this.heart.core.console.type.error, `Collector error for panel ${panelId}:`, err);
+				new this.heart.core.error.interface(this.heart, err);
+			});
+
 		} catch (err) {
-			this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving panel messages to database:', err);
+			this.heart.core.console.log(this.heart.core.console.type.error, `Error setting up collector for existing message ${messageId}:`, err);
+			new this.heart.core.error.interface(this.heart, err);
 		}
 	}
 
 	/**
-	 * Remove panel message from database
+	 * Save panel message to MongoDB database using AthenaBot models
 	 */
-	async removePanelMessageFromDatabase(channelId, panelId) {
+	async savePanelMessageToDatabase(guildId, channelId, messageId, panelId, panelType = 'modern', panelName = '', productCount = 0) {
 		try {
+			const ProductPanelModel = this.heart.core.database.getModel('productPanel').getModel();
+			
+			await ProductPanelModel.findOneAndUpdate(
+				{ 
+					guildId, 
+					channelId, 
+					panelId 
+				},
+				{
+					guildId,
+					channelId,
+					messageId,
+					panelId,
+					panelType,
+					panelName,
+					productCount,
+					lastUpdated: new Date(),
+					isActive: true
+				},
+				{ 
+					upsert: true, 
+					new: true 
+				}
+			);
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving panel message to database:', err);
+			new this.heart.core.error.interface(this.heart, err);
+		}
+	}
+
+	/**
+	 * Remove panel message from MongoDB database
+	 */
+	async removePanelMessageFromDatabase(guildId, channelId, panelId) {
+		try {
+			const ProductPanelModel = this.heart.core.database.getModel('productPanel').getModel();
+			
+			await ProductPanelModel.findOneAndUpdate(
+				{ guildId, channelId, panelId },
+				{ isActive: false, lastUpdated: new Date() }
+			);
+
 			this.panelMessages.delete(`${channelId}-${panelId}`);
-			await this.savePanelMessagesToDatabase();
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error removing panel message from database:', err);
+			new this.heart.core.error.interface(this.heart, err);
 		}
 	}
 
 	/**
-	 * Clear all panel messages from database
+	 * Clear all panel messages from MongoDB database
 	 */
 	async clearAllPanelMessagesFromDatabase() {
 		try {
-			const cache = this.getCache();
-			if (cache) {
-				await cache.delete('panel_messages');
+			const ProductPanelModel = this.heart.core.database.getModel('productPanel').getModel();
+			const client = this.heart.core.discord?.client;
+			
+			if (!client) {
+				throw new Error('Discord client not available');
 			}
+
+			// Get all guilds this bot is in
+			const guildIds = client.guilds.cache.map(guild => guild.id);
+
+			// Mark all panel messages as inactive for these guilds
+			const result = await ProductPanelModel.updateMany(
+				{ guildId: { $in: guildIds }, isActive: true },
+				{ isActive: false, lastUpdated: new Date() }
+			);
+
 			this.panelMessages.clear();
+			
+			this.heart.core.console.log(
+				this.heart.core.console.type.log,
+				`Cleared ${result.modifiedCount} panel messages from database`
+			);
+
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error clearing panel messages from database:', err);
+			new this.heart.core.error.interface(this.heart, err);
+		}
+	}
+
+	/**
+	 * Track download in database using AthenaBot models
+	 */
+	async trackDownloadInDatabase(interaction, product, panelId, source, success = true, errorMessage = '') {
+		try {
+			const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+			const loggingConfig = productConfig?.config?.logging || {};
+
+			if (!loggingConfig.track_downloads) return;
+
+			const ProductDownloadModel = this.heart.core.database.getModel('productDownload').getModel();
+			
+			// Get file size if enabled
+			let fileSize = 0;
+			if (loggingConfig.include_file_size && success) {
+				try {
+					const filePath = path.join(__dirname, '../../data/products/', product.file_path);
+					const stats = fs.statSync(filePath);
+					fileSize = stats.size;
+				} catch (err) {
+					// Ignore file size errors
+				}
+			}
+
+			// Get user roles if enabled
+			let userRoles = [];
+			if (loggingConfig.include_user_roles && interaction.member) {
+				userRoles = interaction.member.roles.cache.map(role => role.id);
+			}
+
+			const downloadRecord = new ProductDownloadModel({
+				guildId: interaction.guild.id,
+				userId: interaction.user.id,
+				username: interaction.user.tag,
+				productId: product.id,
+				productName: product.name,
+				panelId: panelId,
+				panelType: panelId === 'legacy' ? 'legacy' : 'modern',
+				source: source,
+				channelId: source === 'channel_panel' ? interaction.channel.id : null,
+				fileSize: fileSize,
+				downloadTime: new Date(),
+				userRoles: userRoles,
+				success: success,
+				errorMessage: errorMessage
+			});
+
+			await downloadRecord.save();
+
+			// Also update user data following AthenaBot pattern
+			if (success) {
+				const userDoc = await this.heart.core.database.userData.get(interaction.guild.id, interaction.user.id);
+				const downloads = userDoc.downloads || [];
+				downloads.push({
+					product_id: product.id,
+					product_name: product.name,
+					panel_id: panelId,
+					source: source,
+					channel_id: source === 'channel_panel' ? interaction.channel.id : null,
+					timestamp: new Date(),
+					guild_id: interaction.guild.id
+				});
+				
+				await this.heart.core.database.userData.save(interaction.guild.id, interaction.user.id, { 
+					downloads: downloads 
+				});
+			}
+
+		} catch (err) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error tracking download in database:', err);
+			new this.heart.core.error.interface(this.heart, err);
 		}
 	}
 
 	/**
 	 * Sets up a specific panel in a given channel (used by setup command).
-	 * @param {string} panelId - The panel ID.
-	 * @param {Object} panel - The panel configuration.
-	 * @param {Object} targetChannel - The specific channel to setup in.
 	 */
 	async setupPanelInChannel(panelId, panel, targetChannel) {
 		try {
@@ -136,8 +336,7 @@ module.exports = class productPanelHandler extends handler {
 					}
 				} catch (fetchErr) {
 					// Message doesn't exist anymore, remove from tracking
-					this.panelMessages.delete(existingKey);
-					await this.savePanelMessagesToDatabase();
+					await this.removePanelMessageFromDatabase(targetChannel.guild.id, targetChannel.id, panelId);
 				}
 			}
 
@@ -150,13 +349,13 @@ module.exports = class productPanelHandler extends handler {
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, `Error setting up panel ${panelId} in channel:`, err);
+			new this.heart.core.error.interface(this.heart, err);
 			throw err;
 		}
 	}
 
 	/**
 	 * Sets up the legacy panel in a given channel (used by setup command).
-	 * @param {Object} targetChannel - The specific channel to setup in.
 	 */
 	async setupLegacyPanelInChannel(targetChannel) {
 		try {
@@ -183,8 +382,7 @@ module.exports = class productPanelHandler extends handler {
 					}
 				} catch (fetchErr) {
 					// Message doesn't exist anymore, remove from tracking
-					this.panelMessages.delete(existingKey);
-					await this.savePanelMessagesToDatabase();
+					await this.removePanelMessageFromDatabase(targetChannel.guild.id, targetChannel.id, 'legacy');
 				}
 			}
 
@@ -197,6 +395,7 @@ module.exports = class productPanelHandler extends handler {
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error setting up legacy panel in channel:', err);
+			new this.heart.core.error.interface(this.heart, err);
 			throw err;
 		}
 	}
@@ -250,6 +449,7 @@ module.exports = class productPanelHandler extends handler {
 
 				} catch (err) {
 					this.heart.core.console.log(this.heart.core.console.type.error, `Error clearing message ${messageKey}:`, err);
+					new this.heart.core.error.interface(this.heart, err);
 					errorCount++;
 				}
 			}
@@ -271,15 +471,13 @@ module.exports = class productPanelHandler extends handler {
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error in clear all panel messages:', err);
+			new this.heart.core.error.interface(this.heart, err);
 			throw err;
 		}
 	}
 
 	/**
 	 * Creates a panel message in the specified channel.
-	 * @param {Object} channel - The Discord channel object.
-	 * @param {string} panelId - The panel ID.
-	 * @param {Object} panel - The panel configuration.
 	 */
 	async createPanelMessage(channel, panelId, panel) {
 		try {
@@ -314,10 +512,18 @@ module.exports = class productPanelHandler extends handler {
 				components: buttons
 			});
 
-			// Store message ID for tracking
+			// Store message ID for tracking in memory and database
 			const messageKey = `${channel.id}-${panelId}`;
 			this.panelMessages.set(messageKey, message.id);
-			await this.savePanelMessagesToDatabase();
+			await this.savePanelMessageToDatabase(
+				channel.guild.id, 
+				channel.id, 
+				message.id, 
+				panelId, 
+				'modern',
+				panel.name || panelId,
+				enabledProducts.length
+			);
 
 			// Set up persistent button collector
 			const collector = message.createMessageComponentCollector({
@@ -330,18 +536,18 @@ module.exports = class productPanelHandler extends handler {
 
 			collector.on('error', (err) => {
 				this.heart.core.console.log(this.heart.core.console.type.error, `Collector error for panel ${panelId}:`, err);
+				new this.heart.core.error.interface(this.heart, err);
 			});
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, `Error creating panel message for ${panelId}:`, err);
+			new this.heart.core.error.interface(this.heart, err);
 			throw err;
 		}
 	}
 
 	/**
 	 * Creates a legacy panel message in the specified channel.
-	 * @param {Object} channel - The Discord channel object.
-	 * @param {Object} panel - The panel configuration.
 	 */
 	async createLegacyPanelMessage(channel, panel) {
 		try {
@@ -379,10 +585,18 @@ module.exports = class productPanelHandler extends handler {
 				components: buttons
 			});
 
-			// Store message ID for tracking
+			// Store message ID for tracking in memory and database
 			const messageKey = `${channel.id}-legacy`;
 			this.panelMessages.set(messageKey, message.id);
-			await this.savePanelMessagesToDatabase();
+			await this.savePanelMessageToDatabase(
+				channel.guild.id, 
+				channel.id, 
+				message.id, 
+				'legacy', 
+				'legacy',
+				'Legacy Panel',
+				enabledProducts.length
+			);
 
 			// Set up persistent button collector
 			const collector = message.createMessageComponentCollector({
@@ -395,19 +609,18 @@ module.exports = class productPanelHandler extends handler {
 
 			collector.on('error', (err) => {
 				this.heart.core.console.log(this.heart.core.console.type.error, 'Collector error for legacy panel:', err);
+				new this.heart.core.error.interface(this.heart, err);
 			});
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error creating legacy panel message:', err);
+			new this.heart.core.error.interface(this.heart, err);
 			throw err;
 		}
 	}
 
 	/**
 	 * Creates product buttons for channel panels.
-	 * @param {Array} products - Array of product objects.
-	 * @param {string} panelId - The panel ID.
-	 * @returns {Array} Array of ActionRowBuilder components.
 	 */
 	createChannelProductButtons(products, panelId) {
 		const buttons = [];
@@ -439,6 +652,7 @@ module.exports = class productPanelHandler extends handler {
 					row.addComponents(button);
 				} catch (buttonErr) {
 					this.heart.core.console.log(this.heart.core.console.type.error, `Error creating button for product ${product.id}:`, buttonErr);
+					new this.heart.core.error.interface(this.heart, buttonErr);
 				}
 			}
 
@@ -452,8 +666,6 @@ module.exports = class productPanelHandler extends handler {
 
 	/**
 	 * Handles button interactions from channel panels.
-	 * @param {ButtonInteraction} buttonInteraction - The button interaction object.
-	 * @param {string} panelId - The panel ID where the button was clicked.
 	 */
 	async handleChannelButtonInteraction(buttonInteraction, panelId) {
 		try {
@@ -472,6 +684,7 @@ module.exports = class productPanelHandler extends handler {
 			}
 
 			if (!product) {
+				await this.trackDownloadInDatabase(buttonInteraction, { id: productId, name: 'Unknown Product' }, panelId, 'channel_panel', false, 'Product not found');
 				return await buttonInteraction.reply({
 					content: productConfig.config.advanced?.error_messages?.panel_not_found || '❌ Product not found.',
 					ephemeral: true
@@ -480,6 +693,7 @@ module.exports = class productPanelHandler extends handler {
 
 			// Check if product is enabled
 			if (product.enabled === false) {
+				await this.trackDownloadInDatabase(buttonInteraction, product, panelId, 'channel_panel', false, 'Product disabled');
 				return await buttonInteraction.reply({
 					content: '❌ This product is currently disabled.',
 					ephemeral: true
@@ -498,6 +712,7 @@ module.exports = class productPanelHandler extends handler {
 					return role ? role.name : 'Unknown Role';
 				}).join(', ') || 'Required roles not configured';
 
+				await this.trackDownloadInDatabase(buttonInteraction, product, panelId, 'channel_panel', false, 'Insufficient permissions');
 				return await buttonInteraction.reply({
 					content: productConfig.config.advanced?.error_messages?.no_permission ||
 						`❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
@@ -508,6 +723,7 @@ module.exports = class productPanelHandler extends handler {
 			// Check if file exists
 			const filePath = path.join(__dirname, '../../data/products/', product.file_path);
 			if (!fs.existsSync(filePath)) {
+				await this.trackDownloadInDatabase(buttonInteraction, product, panelId, 'channel_panel', false, 'File not found');
 				return await buttonInteraction.reply({
 					content: productConfig.config.advanced?.error_messages?.file_not_found ||
 						'❌ Product file not found. Please contact an administrator.',
@@ -542,11 +758,15 @@ module.exports = class productPanelHandler extends handler {
 				`Channel download: ${buttonInteraction.user.tag} (${buttonInteraction.user.id}) downloaded "${product.name}" from panel "${panelId}" in ${buttonInteraction.channel.name}`
 			);
 
-			// Save to database for tracking and log to channel
-			await this.trackChannelDownload(buttonInteraction, productConfig, product, panelId);
+			// Track successful download in database
+			await this.trackDownloadInDatabase(buttonInteraction, product, panelId, 'channel_panel', true);
+
+			// Log to channel if enabled
+			await this.logDownloadToChannel(buttonInteraction, productConfig, product, panelId);
 
 		} catch (err) {
 			this.heart.core.console.log(this.heart.core.console.type.error, 'Error handling channel button interaction:', err);
+			new this.heart.core.error.interface(this.heart, err);
 			
 			if (!buttonInteraction.replied) {
 				await buttonInteraction.reply({
@@ -558,37 +778,13 @@ module.exports = class productPanelHandler extends handler {
 	}
 
 	/**
-	 * Track channel download in database and log to channel
+	 * Log download to channel if enabled
 	 */
-	async trackChannelDownload(buttonInteraction, productConfig, product, panelId) {
-		const loggingConfig = productConfig.config.logging || {};
+	async logDownloadToChannel(buttonInteraction, productConfig, product, panelId) {
+		try {
+			const loggingConfig = productConfig.config.logging || {};
 
-		// Save to database for tracking
-		if (loggingConfig.track_downloads && loggingConfig.log_channel_downloads !== false) {
-			try {
-				const userDoc = await this.heart.core.database.userData.get(buttonInteraction.guild.id, buttonInteraction.user.id);
-				const downloads = userDoc.downloads || [];
-				downloads.push({
-					product_id: product.id,
-					product_name: product.name,
-					panel_id: panelId,
-					source: 'channel_panel',
-					channel_id: buttonInteraction.channel.id,
-					timestamp: new Date(),
-					guild_id: buttonInteraction.guild.id
-				});
-				
-				await this.heart.core.database.userData.save(buttonInteraction.guild.id, buttonInteraction.user.id, { 
-					downloads: downloads 
-				});
-			} catch (dbErr) {
-				this.heart.core.console.log(this.heart.core.console.type.error, 'Error saving download to database:', dbErr);
-			}
-		}
-
-		// Log to channel if enabled
-		if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_channel_downloads !== false) {
-			try {
+			if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_channel_downloads !== false) {
 				const logChannel = buttonInteraction.guild.channels.cache.get(loggingConfig.log_channel_id);
 				if (logChannel) {
 					const logEmbed = new EmbedBuilder()
@@ -605,9 +801,10 @@ module.exports = class productPanelHandler extends handler {
 
 					await logChannel.send({ embeds: [logEmbed] });
 				}
-			} catch (logErr) {
-				this.heart.core.console.log(this.heart.core.console.type.error, 'Error logging to channel:', logErr);
 			}
+		} catch (logErr) {
+			this.heart.core.console.log(this.heart.core.console.type.error, 'Error logging to channel:', logErr);
+			new this.heart.core.error.interface(this.heart, logErr);
 		}
 	}
 };

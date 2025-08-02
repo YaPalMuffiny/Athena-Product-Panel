@@ -14,19 +14,7 @@ const path = require('path');
 
 module.exports = class personalPanel extends command {
     constructor(heart, cmdConfig) {
-        // Create basic config structure if not available
-        let permissionLevel = 'member';
-        
-        try {
-            const productConfig = heart.core.discord.core.config.manager.get('products');
-            if (productConfig) {
-                const config = productConfig.get();
-                permissionLevel = config?.config?.permissions?.personal_panel || 'member';
-            }
-        } catch (err) {
-            heart.core.console.log(heart.core.console.type.warning, 'Could not load products config for command constructor, using defaults');
-        }
-
+        // Don't try to access config during construction - use default permission level
         super(heart, {
             name: 'products',
             data: new SlashCommandBuilder()
@@ -42,7 +30,7 @@ module.exports = class personalPanel extends command {
             global: true,
             category: 'products',
             bypass: false,
-            permissionLevel: permissionLevel,
+            permissionLevel: 'member', // Default, will be checked during execution
         });
     }
 
@@ -99,6 +87,18 @@ module.exports = class personalPanel extends command {
             }
 
             const config = productConfig.get();
+            
+            // Check permission level from config during execution
+            const requiredPermissionLevel = config?.config?.permissions?.personal_panel || 'member';
+            
+            // Basic permission check (you might want to implement a more sophisticated check based on your permission system)
+            if (requiredPermissionLevel === 'admin' && !interaction.member.permissions.has('Administrator')) {
+                return await interaction.reply({
+                    content: '❌ You need administrator permissions to use this command.',
+                    ephemeral: true
+                });
+            }
+            
             const selectedPanel = interaction.options.getString('panel');
             
             // Check if any panels are configured
