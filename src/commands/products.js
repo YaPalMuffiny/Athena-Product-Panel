@@ -14,13 +14,17 @@ const path = require('path');
 
 module.exports = class personalPanel extends command {
     constructor(heart, cmdConfig) {
-        // Get config safely with error handling
-        let productConfig;
+        // Create basic config structure if not available
+        let permissionLevel = 'member';
+        
         try {
-            productConfig = heart.core.discord.core.config.manager.get('products').get();
+            const productConfig = heart.core.discord.core.config.manager.get('products');
+            if (productConfig) {
+                const config = productConfig.get();
+                permissionLevel = config?.config?.permissions?.personal_panel || 'member';
+            }
         } catch (err) {
-            heart.core.console.log(heart.core.console.type.error, 'Error getting products config in command constructor:', err);
-            productConfig = { config: { permissions: {} } }; // Default fallback
+            heart.core.console.log(heart.core.console.type.warning, 'Could not load products config for command constructor, using defaults');
         }
 
         super(heart, {
@@ -38,22 +42,25 @@ module.exports = class personalPanel extends command {
             global: true,
             category: 'products',
             bypass: false,
-            permissionLevel: productConfig.config.permissions?.personal_panel || 'member',
+            permissionLevel: permissionLevel,
         });
     }
 
     async autocomplete(interaction) {
         try {
-            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
-            const focusedValue = interaction.options.getFocused();
+            const productConfig = this.heart.core.discord.core.config.manager.get('products');
+            if (!productConfig) {
+                return await interaction.respond([]);
+            }
             
+            const config = productConfig.get();
+            const focusedValue = interaction.options.getFocused();
             const choices = [];
             
             // Add multi-panels
-            if (productConfig.config.panels) {
-                Object.keys(productConfig.config.panels).forEach(panelId => {
-                    const panel = productConfig.config.panels[panelId];
-                    if (panel.enabled !== false) { // Include if not explicitly disabled
+            if (config?.config?.panels) {
+                Object.entries(config.config.panels).forEach(([panelId, panel]) => {
+                    if (panel.enabled !== false && panel.products?.length > 0) {
                         choices.push({
                             name: panel.name || panelId,
                             value: panelId
@@ -63,7 +70,7 @@ module.exports = class personalPanel extends command {
             }
             
             // Add legacy panel if enabled and has products
-            if (productConfig.config.legacy?.enabled && productConfig.config.legacy.products?.length > 0) {
+            if (config?.config?.legacy?.enabled && config.config.legacy.products?.length > 0) {
                 choices.push({
                     name: 'Legacy Panel',
                     value: 'legacy'
@@ -83,14 +90,22 @@ module.exports = class personalPanel extends command {
 
     async execute(interaction, langConfig) {
         try {
-            const productConfig = this.heart.core.discord.core.config.manager.get('products').get();
+            const productConfig = this.heart.core.discord.core.config.manager.get('products');
+            if (!productConfig) {
+                return await interaction.reply({
+                    content: '❌ Product configuration not found. Please contact an administrator.',
+                    ephemeral: true
+                });
+            }
+
+            const config = productConfig.get();
             const selectedPanel = interaction.options.getString('panel');
             
             // Check if any panels are configured
-            const hasMultiPanels = productConfig.config.panels && 
-                Object.values(productConfig.config.panels).some(panel => panel.enabled !== false && panel.products?.length > 0);
-            const hasLegacyProducts = productConfig.config.legacy?.enabled && 
-                productConfig.config.legacy.products && productConfig.config.legacy.products.length > 0;
+            const hasMultiPanels = config?.config?.panels && 
+                Object.values(config.config.panels).some(panel => panel.enabled !== false && panel.products?.length > 0);
+            const hasLegacyProducts = config?.config?.legacy?.enabled && 
+                config.config.legacy.products && config.config.legacy.products.length > 0;
 
             if (!hasMultiPanels && !hasLegacyProducts) {
                 return await interaction.reply({
@@ -100,12 +115,12 @@ module.exports = class personalPanel extends command {
             }
 
             if (hasMultiPanels && !selectedPanel) {
-                await this.showPanelSelection(interaction, productConfig);
+                await this.showPanelSelection(interaction, config);
             } else if (selectedPanel) {
-                await this.showSpecificPanel(interaction, productConfig, selectedPanel);
+                await this.showSpecificPanel(interaction, config, selectedPanel);
             } else {
                 // Only legacy products available
-                await this.showLegacyPanel(interaction, productConfig);
+                await this.showLegacyPanel(interaction, config);
             }
 
         } catch (err) {
@@ -121,85 +136,104 @@ module.exports = class personalPanel extends command {
     }
 
     async showPanelSelection(interaction, productConfig) {
-        const embed = new EmbedBuilder()
-            .setTitle('🛍️ Choose Your Product Panel')
-            .setDescription('Select which product panel you want to access:')
-            .setColor(productConfig.config.global?.default_embed_color || '#0099ff')
-            .setFooter({ text: 'Your personal product panel - only you can see this' })
-            .setTimestamp();
+        try {
+            const embed = new EmbedBuilder()
+                .setTitle('🛍️ Choose Your Product Panel')
+                .setDescription('Select which product panel you want to access:')
+                .setColor(productConfig?.config?.global?.default_embed_color || '#0099ff')
+                .setFooter({ text: 'Your personal product panel - only you can see this' })
+                .setTimestamp();
 
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId(`products:panel_select:${interaction.user.id}`)
-            .setPlaceholder('Choose a product panel...');
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId(`products:panel_select:${interaction.user.id}`)
+                .setPlaceholder('Choose a product panel...');
 
-        // Add multi-panels
-        if (productConfig.config.panels) {
-            Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
-                if (panel.enabled !== false && panel.products?.length > 0) {
-                    selectMenu.addOptions(
-                        new StringSelectMenuOptionBuilder()
-                            .setLabel(panel.name || panelId)
-                            .setDescription((panel.description?.substring(0, 100) || 'Product panel') + (panel.description?.length > 100 ? '...' : ''))
-                            .setValue(panelId)
-                            .setEmoji(panel.emoji || '📦')
-                    );
-                }
-            });
-        }
+            let optionsAdded = 0;
 
-        // Add legacy panel if exists
-        if (productConfig.config.legacy?.enabled && productConfig.config.legacy.products?.length > 0) {
-            selectMenu.addOptions(
-                new StringSelectMenuOptionBuilder()
-                    .setLabel('Legacy Panel')
-                    .setDescription('Original product panel')
-                    .setValue('legacy')
-                    .setEmoji('🔧')
-            );
-        }
+            // Add multi-panels
+            if (productConfig?.config?.panels) {
+                Object.entries(productConfig.config.panels).forEach(([panelId, panel]) => {
+                    if (panel.enabled !== false && panel.products?.length > 0) {
+                        selectMenu.addOptions(
+                            new StringSelectMenuOptionBuilder()
+                                .setLabel((panel.name || panelId).substring(0, 100))
+                                .setDescription((panel.description?.substring(0, 100) || 'Product panel') + (panel.description?.length > 100 ? '...' : ''))
+                                .setValue(panelId)
+                                .setEmoji(panel.emoji || '📦')
+                        );
+                        optionsAdded++;
+                    }
+                });
+            }
 
-        // Check if we have any options
-        if (selectMenu.options.length === 0) {
-            return await interaction.reply({
-                content: '❌ No enabled panels with products found.',
+            // Add legacy panel if exists
+            if (productConfig?.config?.legacy?.enabled && productConfig.config.legacy.products?.length > 0) {
+                selectMenu.addOptions(
+                    new StringSelectMenuOptionBuilder()
+                        .setLabel('Legacy Panel')
+                        .setDescription('Original product panel')
+                        .setValue('legacy')
+                        .setEmoji('🔧')
+                );
+                optionsAdded++;
+            }
+
+            // Check if we have any options
+            if (optionsAdded === 0) {
+                return await interaction.reply({
+                    content: '❌ No enabled panels with products found.',
+                    ephemeral: true
+                });
+            }
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+
+            const reply = await interaction.reply({
+                embeds: [embed],
+                components: [row],
                 ephemeral: true
             });
+
+            const collector = reply.createMessageComponentCollector({ 
+                filter: (i) => i.user.id === interaction.user.id,
+                time: 300000 
+            });
+
+            collector.on('collect', async (selectInteraction) => {
+                try {
+                    if (selectInteraction.customId === `products:panel_select:${interaction.user.id}`) {
+                        const selectedPanelId = selectInteraction.values[0];
+                        await this.displayPanel(selectInteraction, productConfig, selectedPanelId);
+                    }
+                } catch (err) {
+                    this.heart.core.console.log(this.heart.core.console.type.error, 'Error in panel selection collector:', err);
+                }
+            });
+
+            collector.on('end', async () => {
+                try {
+                    await interaction.editReply({ components: [] });
+                } catch (err) {
+                    // Ignore edit errors after interaction expires
+                }
+            });
+
+        } catch (err) {
+            this.heart.core.console.log(this.heart.core.console.type.error, 'Error showing panel selection:', err);
+            if (!interaction.replied) {
+                await interaction.reply({
+                    content: '❌ Error showing panel selection.',
+                    ephemeral: true
+                });
+            }
         }
-
-        const row = new ActionRowBuilder().addComponents(selectMenu);
-
-        const reply = await interaction.reply({
-            embeds: [embed],
-            components: [row],
-            ephemeral: true
-        });
-
-        const collector = reply.createMessageComponentCollector({ 
-            filter: (i) => i.user.id === interaction.user.id,
-            time: 300000 
-        });
-
-        collector.on('collect', async (selectInteraction) => {
-            if (selectInteraction.customId === `products:panel_select:${interaction.user.id}`) {
-                const selectedPanelId = selectInteraction.values[0];
-                await this.displayPanel(selectInteraction, productConfig, selectedPanelId);
-            }
-        });
-
-        collector.on('end', async () => {
-            try {
-                await interaction.editReply({ components: [] });
-            } catch (err) {
-                // Ignore edit errors after interaction expires
-            }
-        });
     }
 
     async showSpecificPanel(interaction, productConfig, panelId) {
         if (panelId === 'legacy') {
             await this.showLegacyPanel(interaction, productConfig);
         } else {
-            const panel = productConfig.config.panels?.[panelId];
+            const panel = productConfig?.config?.panels?.[panelId];
             if (!panel || panel.enabled === false) {
                 return await interaction.reply({
                     content: '❌ Panel not found or disabled.',
@@ -211,7 +245,7 @@ module.exports = class personalPanel extends command {
     }
 
     async showLegacyPanel(interaction, productConfig) {
-        if (!productConfig.config.legacy?.enabled || !productConfig.config.legacy.products?.length) {
+        if (!productConfig?.config?.legacy?.enabled || !productConfig.config.legacy.products?.length) {
             return await interaction.reply({
                 content: '❌ Legacy panel is not enabled or has no products.',
                 ephemeral: true
@@ -221,82 +255,104 @@ module.exports = class personalPanel extends command {
     }
 
     async displayPanel(interaction, productConfig, panelId) {
-        let panel, products;
+        try {
+            let panel, products;
 
-        if (panelId === 'legacy') {
-            panel = productConfig.config.legacy?.panel || {};
-            products = productConfig.config.legacy?.products || [];
-        } else {
-            panel = productConfig.config.panels?.[panelId];
-            if (!panel) {
+            if (panelId === 'legacy') {
+                panel = productConfig?.config?.legacy?.panel || {};
+                products = productConfig?.config?.legacy?.products || [];
+            } else {
+                panel = productConfig?.config?.panels?.[panelId];
+                if (!panel) {
+                    return await interaction.reply({
+                        content: '❌ Panel not found.',
+                        ephemeral: true
+                    });
+                }
+                products = panel.products || [];
+            }
+
+            // Filter enabled products
+            const enabledProducts = products.filter(p => p.enabled !== false);
+
+            if (enabledProducts.length === 0) {
+                const embed = new EmbedBuilder()
+                    .setTitle('📦 No Products Available')
+                    .setDescription('This panel has no enabled products.')
+                    .setColor('#ff9900')
+                    .setTimestamp();
+
                 return await interaction.reply({
-                    content: '❌ Panel not found.',
+                    embeds: [embed],
                     ephemeral: true
                 });
             }
-            products = panel.products || [];
-        }
 
-        // Filter enabled products
-        const enabledProducts = products.filter(p => p.enabled !== false);
-
-        if (enabledProducts.length === 0) {
             const embed = new EmbedBuilder()
-                .setTitle('📦 No Products Available')
-                .setDescription('This panel has no enabled products.')
-                .setColor('#ff9900')
+                .setTitle(panel.title || '🛍️ Product Downloads')
+                .setDescription(panel.description || 'Click the buttons below to download products:')
+                .setColor(panel.embed_color || productConfig?.config?.global?.default_embed_color || '#0099ff')
+                .setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Personal Panel` })
                 .setTimestamp();
 
-            return await interaction.reply({
+            if (panel.thumbnail_url) {
+                embed.setThumbnail(panel.thumbnail_url);
+            }
+
+            const buttons = this.createProductButtons(enabledProducts, interaction.user.id, panelId);
+
+            if (buttons.length === 0) {
+                return await interaction.reply({
+                    content: '❌ No valid buttons could be created for this panel.',
+                    ephemeral: true
+                });
+            }
+
+            const replyOptions = {
                 embeds: [embed],
+                components: buttons,
                 ephemeral: true
+            };
+
+            let reply;
+            if (interaction.replied || interaction.deferred) {
+                reply = await interaction.editReply(replyOptions);
+            } else {
+                reply = await interaction.reply(replyOptions);
+            }
+
+            const collector = reply.createMessageComponentCollector({ 
+                filter: (i) => i.user.id === interaction.user.id,
+                time: productConfig?.config?.advanced?.interaction_timeout || 600000 
             });
-        }
 
-        const embed = new EmbedBuilder()
-            .setTitle(panel.title || '🛍️ Product Downloads')
-            .setDescription(panel.description || 'Click the buttons below to download products:')
-            .setColor(panel.embed_color || productConfig.config.global?.default_embed_color || '#0099ff')
-            .setFooter({ text: `${panel.footer_text || 'Product Downloads'} • Personal Panel` })
-            .setTimestamp();
+            collector.on('collect', async (buttonInteraction) => {
+                try {
+                    if (buttonInteraction.customId.startsWith(`products:download:`)) {
+                        await this.handleProductDownload(buttonInteraction, productConfig, panelId);
+                    }
+                } catch (err) {
+                    this.heart.core.console.log(this.heart.core.console.type.error, 'Error in button collector:', err);
+                }
+            });
 
-        if (panel.thumbnail_url) {
-            embed.setThumbnail(panel.thumbnail_url);
-        }
+            collector.on('end', async () => {
+                try {
+                    await interaction.editReply({ components: [] });
+                } catch (err) {
+                    // Ignore edit errors after interaction expires
+                }
+            });
 
-        const buttons = this.createProductButtons(enabledProducts, interaction.user.id, panelId);
-
-        const replyOptions = {
-            embeds: [embed],
-            components: buttons,
-            ephemeral: true
-        };
-
-        let reply;
-        if (interaction.replied || interaction.deferred) {
-            reply = await interaction.editReply(replyOptions);
-        } else {
-            reply = await interaction.reply(replyOptions);
-        }
-
-        const collector = reply.createMessageComponentCollector({ 
-            filter: (i) => i.user.id === interaction.user.id,
-            time: productConfig.config.advanced?.interaction_timeout || 600000 
-        });
-
-        collector.on('collect', async (buttonInteraction) => {
-            if (buttonInteraction.customId.startsWith(`products:download:`)) {
-                await this.handleProductDownload(buttonInteraction, productConfig, panelId);
+        } catch (err) {
+            this.heart.core.console.log(this.heart.core.console.type.error, 'Error displaying panel:', err);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: '❌ Error displaying panel.',
+                    ephemeral: true
+                });
             }
-        });
-
-        collector.on('end', async () => {
-            try {
-                await interaction.editReply({ components: [] });
-            } catch (err) {
-                // Ignore edit errors after interaction expires
-            }
-        });
+        }
     }
 
     createProductButtons(products, userId, panelId) {
@@ -311,24 +367,35 @@ module.exports = class personalPanel extends command {
             const rowProducts = limitedProducts.slice(i, i + 5);
 
             for (const product of rowProducts) {
-                const button = new ButtonBuilder()
-                    .setCustomId(`products:download:${product.id}:${panelId}:${userId}`)
-                    .setLabel(product.name.length > 80 ? product.name.substring(0, 77) + '...' : product.name)
-                    .setStyle(ButtonStyle.Primary);
-
-                if (product.emoji) {
-                    try {
-                        button.setEmoji(product.emoji);
-                    } catch (err) {
-                        // Invalid emoji, skip setting it
-                        this.heart.core.console.log(this.heart.core.console.type.warning, `Invalid emoji for product ${product.id}: ${product.emoji}`);
+                try {
+                    if (!product.id || !product.name) {
+                        this.heart.core.console.log(this.heart.core.console.type.warning, `Skipping product with missing id or name:`, product);
+                        continue;
                     }
-                }
 
-                row.addComponents(button);
+                    const button = new ButtonBuilder()
+                        .setCustomId(`products:download:${product.id}:${panelId}:${userId}`)
+                        .setLabel(product.name.length > 80 ? product.name.substring(0, 77) + '...' : product.name)
+                        .setStyle(ButtonStyle.Primary);
+
+                    if (product.emoji) {
+                        try {
+                            button.setEmoji(product.emoji);
+                        } catch (err) {
+                            // Invalid emoji, skip setting it
+                            this.heart.core.console.log(this.heart.core.console.type.warning, `Invalid emoji for product ${product.id}: ${product.emoji}`);
+                        }
+                    }
+
+                    row.addComponents(button);
+                } catch (err) {
+                    this.heart.core.console.log(this.heart.core.console.type.error, `Error creating button for product ${product.id}:`, err);
+                }
             }
 
-            buttons.push(row);
+            if (row.components.length > 0) {
+                buttons.push(row);
+            }
         }
 
         return buttons;
@@ -343,15 +410,15 @@ module.exports = class personalPanel extends command {
 
             // Find the product
             if (panelId === 'legacy') {
-                product = productConfig.config.legacy?.products?.find(p => p.id === productId);
+                product = productConfig?.config?.legacy?.products?.find(p => p.id === productId);
             } else {
-                const panel = productConfig.config.panels?.[panelId];
+                const panel = productConfig?.config?.panels?.[panelId];
                 product = panel?.products?.find(p => p.id === productId);
             }
 
             if (!product) {
                 return await buttonInteraction.reply({
-                    content: productConfig.config.advanced?.error_messages?.panel_not_found || '❌ Product not found.',
+                    content: productConfig?.config?.advanced?.error_messages?.panel_not_found || '❌ Product not found.',
                     ephemeral: true
                 });
             }
@@ -366,18 +433,25 @@ module.exports = class personalPanel extends command {
 
             // Check user permissions
             const member = buttonInteraction.member;
+            if (!member) {
+                return await buttonInteraction.reply({
+                    content: '❌ Could not verify your permissions.',
+                    ephemeral: true
+                });
+            }
+
             const hasRequiredRole = product.required_roles?.some(roleId => 
                 member.roles.cache.has(roleId)
             );
 
             if (!hasRequiredRole) {
                 const roleNames = product.required_roles?.map(roleId => {
-                    const role = buttonInteraction.guild.roles.cache.get(roleId);
+                    const role = buttonInteraction.guild?.roles?.cache?.get(roleId);
                     return role ? role.name : 'Unknown Role';
                 }).join(', ') || 'Required roles not configured';
 
                 return await buttonInteraction.reply({
-                    content: productConfig.config.advanced?.error_messages?.no_permission || 
+                    content: productConfig?.config?.advanced?.error_messages?.no_permission || 
                         `❌ **Access Denied**\n\nYou need one of these roles to download this product:\n**${roleNames}**`,
                     ephemeral: true
                 });
@@ -387,7 +461,7 @@ module.exports = class personalPanel extends command {
             const filePath = path.join(__dirname, '../../data/products/', product.file_path);
             if (!fs.existsSync(filePath)) {
                 return await buttonInteraction.reply({
-                    content: productConfig.config.advanced?.error_messages?.file_not_found || 
+                    content: productConfig?.config?.advanced?.error_messages?.file_not_found || 
                         '❌ Product file not found. Please contact an administrator.',
                     ephemeral: true
                 });
@@ -403,7 +477,7 @@ module.exports = class personalPanel extends command {
                 .setDescription(`**${product.name}**\n\n${product.description || 'No description available.'}`)
                 .addFields(
                     { name: 'File Name', value: product.download_name || product.file_path, inline: true },
-                    { name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : (productConfig.config.panels?.[panelId]?.name || panelId), inline: true }
+                    { name: 'Panel', value: panelId === 'legacy' ? 'Legacy Panel' : (productConfig?.config?.panels?.[panelId]?.name || panelId), inline: true }
                 )
                 .setColor('#00ff00')
                 .setFooter({ text: 'Download is private and only visible to you' })
@@ -437,7 +511,7 @@ module.exports = class personalPanel extends command {
     }
 
     async trackDownload(buttonInteraction, productConfig, product, panelId) {
-        const loggingConfig = productConfig.config.logging || {};
+        const loggingConfig = productConfig?.config?.logging || {};
 
         // Track download in database if enabled
         if (loggingConfig.track_downloads && loggingConfig.log_personal_downloads !== false) {
@@ -464,7 +538,7 @@ module.exports = class personalPanel extends command {
         // Log to channel if enabled
         if (loggingConfig.log_to_channel && loggingConfig.log_channel_id && loggingConfig.log_personal_downloads !== false) {
             try {
-                const logChannel = buttonInteraction.guild.channels.cache.get(loggingConfig.log_channel_id);
+                const logChannel = buttonInteraction.guild?.channels?.cache?.get(loggingConfig.log_channel_id);
                 if (logChannel) {
                     const logEmbed = new EmbedBuilder()
                         .setTitle('📥 Personal Download')
